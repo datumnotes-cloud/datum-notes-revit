@@ -1,0 +1,7 @@
+{
+  "name": "Datum Notes",
+  "type": "extension",
+  "builtin": false,
+  "rocket_mode_compatible": true,
+  "description": "PyRevit toolbar for meeting-note workflows in Revit."
+}
