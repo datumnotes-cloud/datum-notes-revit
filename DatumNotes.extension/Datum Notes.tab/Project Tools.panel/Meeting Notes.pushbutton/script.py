@@ -7,6 +7,7 @@ import json
 import codecs
 import base64
 import datetime
+import traceback
 
 from pyrevit import revit, DB, forms, script
 
@@ -20,7 +21,13 @@ from System.Windows import Clipboard
 from System.Windows.Input import Key, ModifierKeys, Keyboard
 
 
+__persistentengine__ = True
+
+
 UPLOAD_INFO_URL = "https://datumnotes.com/from-revit"
+UPDATE_INFO_URL = "https://datumnotes.com/revit/releases"
+TUTORIAL_URL = "https://datumnotes.com/revit/tutorial"
+EXTENSION_VERSION = "0.3.0"
 CATEGORY_OPTIONS = ["Decision", "Action Item", "Question", "Observation"]
 BADGE_COLORS = {
     "Decision": "#2563EB",
@@ -30,10 +37,18 @@ BADGE_COLORS = {
 }
 DEFAULT_TEAM_MEMBERS = ["PM", "Architect", "Coordinator", "MEP", "Owner"]
 SORT_OPTIONS = ["Newest First", "Oldest First", "By Room"]
-CATEGORY_TAB_OPTIONS = ["All", "Action Item", "Question", "Decision", "Observation", "Unassigned"]
+CATEGORY_TAB_OPTIONS = ["All", "Action Item", "Question", "Decision", "Observation", "Pending"]
 UNASSIGNED_ROOM_ID = "UNASSIGNED"
-UNASSIGNED_ROOM_DISPLAY = "UNASSIGNED | Unassigned"
+UNASSIGNED_ROOM_DISPLAY = "GENERAL | General"
 ICON_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAHjSURBVHhe7dExbsNQEANR9+5ygpw8t0ydNHJDwAB3IYZQNMVr7IX9iXk8Pz5/0PPQD/C3CFBGgDIClBGgjABlBCgjQBkByghQRoAyApQRoOy0AN9fz1vR/VsEWNL9WwRY0v1bBFjS/VuxAPr91aX2EcCU2kcAU2ofAUypfQQwpfYRwJTaRwBTah8BTKl9BDCl9hHAlNpXC6D3bfo+Nb13EeCg71PTexcBDvo+Nb13EeCg71PTe1ctwNWk9hHAlNpHAFNqHwFMqX0EMKX2EcCU2kcAU2ofAUypfbUAet+m71PTexcBDvo+Nb13EeCg71PTexcBDvo+Nb131QJcTWofAUypfQQwpfYRwJTaRwBTah8BTKl9BDCl9hHAlNpXC6D3afr/U2f/3gsBTGf/3svtAujn+v0703sXAeT7d6b3rlqAFn2n+97pvYsA5nun9y4CmO+d3rsIYL53eu+6XYCt1D4CmFL7CGBK7SOAKbWPAKbUPgKYUvsIYErtI4AptY8AptQ+AphS+whgSu0jgCm1jwCm1D4CmFL7CGBK7SOAKbWPAKbUPgKYUvtiAf473b9FgCXdv0WAJd2/RYAl3b91WgDsEKCMAGUEKCNAGQHKCFBGgDIClBGgjABlBCgjQBkByn4BQpL38pWaWnMAAAAASUVORK5CYII="
+
+THEME_WINDOW_BG = "#262626"
+THEME_PANEL_BG = "#303030"
+THEME_PANEL_BORDER = "#4A4A4A"
+THEME_CARD_BG = "#383838"
+THEME_INPUT_BG = "#3A3A3A"
+THEME_BUTTON_BG = "#444444"
+THEME_BUTTON_BORDER = "#606060"
 
 
 def _brush(color_hex):
@@ -138,6 +153,30 @@ def _normalize_note(note):
     category = _normalize_category(base.get("category", "Observation"))
     comments = base.get("comments", [])
 
+    # Prefer assigned_to when present to handle legacy/imported payloads
+    # where assignedTo and assigned_to can conflict.
+    assigned_value = _safe_text(
+        base.get("assigned_to")
+        or base.get("assignedTo")
+        or base.get("assigned")
+        or base.get("assignee")
+    ).strip()
+
+    room_id = _safe_text(base.get("roomId", "")).strip()
+    room_display = _safe_text(base.get("roomDisplay", "")).strip()
+    room_number = _safe_text(base.get("roomNumber", "")).strip()
+    room_name = _safe_text(base.get("roomName", "")).strip()
+    room_level = _safe_text(base.get("level", "")).strip()
+
+    if room_id == UNASSIGNED_ROOM_ID or room_display.upper().startswith("UNASSIGNED"):
+        room_display = UNASSIGNED_ROOM_DISPLAY
+        room_number = "GENERAL"
+        room_name = "General"
+        room_level = "General"
+
+    if not room_display:
+        room_display = "Unknown Room"
+
     normalized_comments = []
     if isinstance(comments, list):
         for c in comments:
@@ -155,26 +194,48 @@ def _normalize_note(note):
     return {
         "id": _safe_text(base.get("id")),
         "timestamp": _safe_text(base.get("timestamp")),
-        "roomId": _safe_text(base.get("roomId")),
-        "roomNumber": _safe_text(base.get("roomNumber")),
-        "roomName": _safe_text(base.get("roomName")),
-        "roomDisplay": _safe_text(base.get("roomDisplay") or "Unknown Room"),
-        "level": _safe_text(base.get("level")),
+        "roomId": room_id,
+        "roomNumber": room_number,
+        "roomName": room_name,
+        "roomDisplay": room_display,
+        "level": room_level,
         "elementId": _safe_text(base.get("elementId")),
         "text": _safe_text(base.get("text")),
         "completed": bool(base.get("completed", False)),
         "completedAt": _safe_text(base.get("completedAt")),
         "completedBy": _safe_text(base.get("completedBy")),
+        "pending": bool(base.get("pending", False)),
         "editedAt": _safe_text(base.get("editedAt")),
         "editedBy": _safe_text(base.get("editedBy")),
         "category": category,
-        "assignedTo": _safe_text(base.get("assignedTo")),
+        "assignedTo": assigned_value,
         "dueDate": _safe_text(base.get("dueDate")) if category == "Action Item" else "",
         "deleted": bool(base.get("deleted", False)),
         "deletedAt": _safe_text(base.get("deletedAt")),
         "imported": bool(base.get("imported", False)),
         "duplicateFrom": _safe_text(base.get("duplicateFrom")),
         "comments": normalized_comments
+    }
+
+
+def _normalize_work_item(item):
+    base = item if isinstance(item, dict) else {}
+    timestamp = _safe_text(base.get("timestamp", "")).strip()
+    parsed = _parse_note_datetime(timestamp)
+    day_text = _safe_text(base.get("day", "")).strip()
+    if not day_text and parsed != datetime.datetime.min:
+        day_text = parsed.strftime("%Y-%m-%d")
+    if not day_text and timestamp:
+        day_text = timestamp[:10]
+
+    return {
+        "id": _safe_text(base.get("id")),
+        "timestamp": timestamp,
+        "day": day_text,
+        "text": _safe_text(base.get("text", "")).strip(),
+        "author": _safe_text(base.get("author", "")).strip(),
+        "editedAt": _safe_text(base.get("editedAt", "")).strip(),
+        "editedBy": _safe_text(base.get("editedBy", "")).strip()
     }
 
 
@@ -212,7 +273,8 @@ def redline_config_path():
 def load_redline_config():
     default_config = {
         "customAssignees": [],
-        "manualResolvedRooms": []
+        "manualResolvedRooms": [],
+        "lastCustomAssignee": ""
     }
 
     path = redline_config_path()
@@ -228,8 +290,10 @@ def load_redline_config():
         out = dict(default_config)
         custom_vals = data.get("customAssignees", [])
         resolved_vals = data.get("manualResolvedRooms", [])
+        last_custom = _safe_text(data.get("lastCustomAssignee", "")).strip()
         out["customAssignees"] = [x for x in custom_vals if _safe_text(x).strip()] if isinstance(custom_vals, list) else []
         out["manualResolvedRooms"] = [x for x in resolved_vals if _safe_text(x).strip()] if isinstance(resolved_vals, list) else []
+        out["lastCustomAssignee"] = last_custom
         return out
     except Exception:
         return default_config
@@ -328,9 +392,9 @@ def unassigned_room_bucket():
         "roomId": UNASSIGNED_ROOM_ID,
         "elementId": "",
         "roomDisplay": UNASSIGNED_ROOM_DISPLAY,
-        "level": "Unassigned",
-        "number": "UNASSIGNED",
-        "name": "Unassigned"
+        "level": "General",
+        "number": "GENERAL",
+        "name": "General"
     }
 
 
@@ -361,14 +425,20 @@ def html_path_for_document(doc):
     return os.path.join(folder, filename)
 
 
-def load_notes(path):
+def load_project_payload(path):
     if not path or not os.path.exists(path):
-        return []
+        return None
 
     try:
         with codecs.open(path, "r", "utf-8") as handle:
-            data = json.load(handle)
+            return json.load(handle)
     except Exception:
+        return None
+
+
+def load_notes(path):
+    data = load_project_payload(path)
+    if data is None:
         return []
 
     if isinstance(data, dict):
@@ -391,7 +461,24 @@ def load_notes(path):
     return []
 
 
-def save_notes(path, doc_title, notes):
+def load_work_log_items(path):
+    data = load_project_payload(path)
+    if not isinstance(data, dict):
+        return []
+
+    items = data.get("workLogItems", data.get("workItems", []))
+    if not isinstance(items, list):
+        return []
+
+    normalized = []
+    for item in items:
+        work_item = _normalize_work_item(item)
+        if work_item.get("text"):
+            normalized.append(work_item)
+    return normalized
+
+
+def save_notes(path, doc_title, notes, work_log_items=None, custom_assignees=None):
     if not path:
         return False
 
@@ -404,11 +491,19 @@ def save_notes(path, doc_title, notes):
         if nid:
             comments_by_note[nid] = n.get("comments", [])
 
+    normalized_work_items = []
+    for item in work_log_items or []:
+        normalized_item = _normalize_work_item(item)
+        if normalized_item.get("text"):
+            normalized_work_items.append(normalized_item)
+
     payload = {
         "redlineProject": _safe_text(doc_title),
         "redlineSavedAt": datetime.datetime.now().isoformat(),
         "redlineItems": normalized_notes,
-        "commentsByNoteId": comments_by_note
+        "commentsByNoteId": comments_by_note,
+        "workLogItems": normalized_work_items,
+        "customAssignees": [_safe_text(x).strip() for x in (custom_assignees or []) if _safe_text(x).strip()]
     }
 
     try:
@@ -731,73 +826,142 @@ li { margin: 0 0 4px 0; }
 
 def build_ai_template(project_name, rooms):
     date_text = datetime.datetime.now().strftime("%Y-%m-%d")
-    return """Parse the transcript below and fill in this template exactly. For each item identify the room it relates to if possible. If a room cannot be determined place the item under a category called UNASSIGNED. Do not leave any action items questions or decisions out.
+    
+    # Build room list
+    room_list = ""
+    if rooms:
+        room_list = "AVAILABLE ROOMS: " + ", ".join(rooms[:10]) + ("\n" if len(rooms) > 10 else "")
+    
+    return """STRICT OUTPUT FORMAT - FOLLOW EXACTLY
+======================================
+
+Parse the transcript below and extract ALL items. Output ONLY the raw data content below - no other text, no explanations.
+
+CRITICAL: OUTPUT THE ENTIRE RESPONSE AS ONE SINGLE LINE.
+CRITICAL: NEVER WRAP TO MULTIPLE LINES.
+
+CATEGORY MARKERS (must prefix each item):
+@@ACTION - For action items that need to be completed
+@@DECISION - For decisions that were made
+@@QUESTION - For open questions/discussions  
+@@OBSERVATION - For general notes/remarks
+@@UNASSIGNED - For items where you cannot determine the room
+
 PROJECT: %s
 DATE: %s
-ACTION ITEMS: room | note | assigned to | due date
-DECISIONS: room | note
-QUESTIONS: room | note | assigned to
-OBSERVATIONS: room | note
-UNASSIGNED: note | category
-""" % (project_name, date_text)
+%s
+
+CRITICAL RULES (FOLLOW PRECISELY):
+1. Entire output must be one line only (single-line response)
+2. If text is long, keep it on that same line with spaces
+3. Use pipe character | to separate fields (pipes ONLY between fields, not elsewhere)
+4. Do NOT include the marker text (@@ACTION, @@DECISION, etc.) inside the note text
+5. Fields for each type:
+   - @@ACTION: room | note text | assigned to | due date (YYYY-MM-DD or leave empty)
+   - @@DECISION: room | note text
+   - @@QUESTION: room | note text | assigned to (or leave empty)
+   - @@OBSERVATION: room | note text
+   - @@UNASSIGNED: note text | category keyword (ACTION/DECISION/QUESTION/OBSERVATION)
+6. For empty fields, use "" or just leave it blank
+7. Room names must match the available rooms list above
+8. Do NOT add line numbers, bullets, explanations, or extra formatting
+
+EXAMPLE OUTPUT (single-line full response):
+@@ACTION: Electrical Room | Replace all south wall fixtures that need attention | Electrician | 2026-03-25 @@ACTION: HVAC Zone 3 | Pressurize test report and document results | MEP Engineer | 2026-03-22 @@DECISION: Structural | Approved 8-inch reinforcement depth change @@DECISION: Architectural | Finalize paint schedule next week during coordination @@QUESTION: Parking Level B | What's the new capacity requirement in current plan? | PM @@QUESTION: Safety | Fire rating on new sealant material? |  @@OBSERVATION: Lobby | Ceiling height increased by 2 feet from original design @@OBSERVATION: Conference Room | Lighting fixtures are different from specs submitted @@UNASSIGNED: Schedule progress meeting on Friday afternoon | ACTION @@UNASSIGNED: Document all RFIs received this month | QUESTION
+
+NOW OUTPUT ONLY THE ITEMS (single-line response, use markers above):
+""" % (project_name, date_text, room_list)
 
 
 def parse_ai_template_input(text):
-    lines = [_safe_text(x).rstrip() for x in _safe_text(text).splitlines()]
+    """Parse AI template output line-by-line using @@ category markers.
+
+    Expected line format:
+    @@CATEGORY: field1 | field2 | field3 | ...
+    """
+    raw = _safe_text(text)
+    if not raw:
+        return []
+
+    # Normalize newlines, then split chained @@ items into separate lines.
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
+    raw = re.sub(r"(?<!\n)@@", "\n@@", raw)
+
     parsed = []
-    current = ""
+
+    # Remove Markdown code-fence lines such as ``` or ```text
+    lines = []
+    for line in raw.split("\n"):
+        cleaned = _safe_text(line).strip()
+        if cleaned.startswith("```"):
+            continue
+        lines.append(cleaned)
 
     for line in lines:
-        striped = line.strip()
-        if not striped:
+        if not line:
             continue
 
-        upper = striped.upper()
-        if upper.startswith("ACTION ITEMS:"):
-            current = "ACTION ITEMS"
-            inline = striped[len("ACTION ITEMS:"):].strip()
-            if inline:
-                striped = inline
-            else:
-                continue
-        if upper.startswith("DECISIONS:"):
-            current = "DECISIONS"
-            inline = striped[len("DECISIONS:"):].strip()
-            if inline:
-                striped = inline
-            else:
-                continue
-        if upper.startswith("QUESTIONS:"):
-            current = "QUESTIONS"
-            inline = striped[len("QUESTIONS:"):].strip()
-            if inline:
-                striped = inline
-            else:
-                continue
-        if upper.startswith("OBSERVATIONS:"):
-            current = "OBSERVATIONS"
-            inline = striped[len("OBSERVATIONS:"):].strip()
-            if inline:
-                striped = inline
-            else:
-                continue
-        if upper.startswith("UNASSIGNED:"):
-            current = "UNASSIGNED"
-            inline = striped[len("UNASSIGNED:"):].strip()
-            if inline:
-                striped = inline
-            else:
-                continue
+        upper_line = line.upper()
+        marker = ""
+        content = ""
 
-        if current not in ["ACTION ITEMS", "DECISIONS", "QUESTIONS", "OBSERVATIONS", "UNASSIGNED"]:
+        if upper_line.startswith("@@ACTION"):
+            marker = "ACTION"
+            content = line[len("@@ACTION"):].lstrip(": ").strip()
+        elif upper_line.startswith("@@DECISION"):
+            marker = "DECISION"
+            content = line[len("@@DECISION"):].lstrip(": ").strip()
+        elif upper_line.startswith("@@QUESTION"):
+            marker = "QUESTION"
+            content = line[len("@@QUESTION"):].lstrip(": ").strip()
+        elif upper_line.startswith("@@OBSERVATION"):
+            marker = "OBSERVATION"
+            content = line[len("@@OBSERVATION"):].lstrip(": ").strip()
+        elif upper_line.startswith("@@UNASSIGNED"):
+            marker = "UNASSIGNED"
+            content = line[len("@@UNASSIGNED"):].lstrip(": ").strip()
+        else:
+            # Ignore lines that do not start with a recognized marker.
             continue
 
-        parts = [p.strip() for p in striped.split("|")]
+        if not content:
+            continue
+
+        parts = [p.strip() for p in content.split("|")]
+        parts = [p if p != '""' and p != "''" else "" for p in parts]
+
         assigned = ""
         due = ""
         is_unassigned = False
 
-        if current == "UNASSIGNED":
+        if marker == "ACTION":
+            if len(parts) < 2:
+                continue
+            room = parts[0] or "UNASSIGNED"
+            note = parts[1]
+            category = "Action Item"
+            assigned = parts[2] if len(parts) > 2 else ""
+            due = parts[3] if len(parts) > 3 else ""
+        elif marker == "DECISION":
+            if len(parts) < 2:
+                continue
+            room = parts[0] or "UNASSIGNED"
+            note = parts[1]
+            category = "Decision"
+        elif marker == "QUESTION":
+            if len(parts) < 2:
+                continue
+            room = parts[0] or "UNASSIGNED"
+            note = parts[1]
+            category = "Question"
+            assigned = parts[2] if len(parts) > 2 else ""
+        elif marker == "OBSERVATION":
+            if len(parts) < 2:
+                continue
+            room = parts[0] or "UNASSIGNED"
+            note = parts[1]
+            category = "Observation"
+        else:
             if len(parts) < 1:
                 continue
             room = "UNASSIGNED"
@@ -805,25 +969,8 @@ def parse_ai_template_input(text):
             category_hint = parts[1] if len(parts) > 1 else "Observation"
             category = _normalize_category(category_hint)
             is_unassigned = True
-        else:
-            if len(parts) < 2:
-                continue
-            room = parts[0]
-            note = parts[1]
 
-            if current == "ACTION ITEMS":
-                category = "Action Item"
-                assigned = parts[2] if len(parts) > 2 else ""
-                due = parts[3] if len(parts) > 3 else ""
-            elif current == "DECISIONS":
-                category = "Decision"
-            elif current == "QUESTIONS":
-                category = "Question"
-                assigned = parts[2] if len(parts) > 2 else ""
-            else:
-                category = "Observation"
-
-        if note:
+        if _safe_text(note).strip():
             parsed.append({
                 "room": room,
                 "text": note,
@@ -849,18 +996,32 @@ class RedlineWindow(forms.WPFWindow):
         self.show_completed = False
         self.show_deleted = False
         self.room_expanders = []
+        self._room_resolved_cache = {}
+        self.selected_work_day = ""
 
         self.config = load_redline_config()
-        self.custom_assignees = sorted(list(set([_safe_text(x).strip() for x in self.config.get("customAssignees", []) if _safe_text(x).strip()])))
         self.manual_resolved_rooms = set([_safe_text(x) for x in self.config.get("manualResolvedRooms", []) if _safe_text(x)])
+        self.last_custom_assignee = _safe_text(self.config.get("lastCustomAssignee", "")).strip()
 
         self.store_path = json_path_for_document(doc)
         self.all_notes = load_notes(self.store_path)
+        self.work_log_items = load_work_log_items(self.store_path)
+
+        _project_data = load_project_payload(self.store_path)
+        _saved_custom = _project_data.get("customAssignees", []) if isinstance(_project_data, dict) else []
+        self.custom_assignees = sorted(list(set([_safe_text(x).strip() for x in _saved_custom if _safe_text(x).strip()])))
+
+        if self._ensure_note_ids():
+            self._save()
+
+        if self._migrate_assignee_fields():
+            self._save()
 
         if self._purge_deleted_notes():
             self._save()
 
         self._wire_events()
+        self.versionTextRun.Text = "v%s" % EXTENSION_VERSION
         self._bind_rooms()
         self._bind_categories()
         self._bind_assignees()
@@ -870,16 +1031,104 @@ class RedlineWindow(forms.WPFWindow):
         self._update_toggle_button_text()
         self._toggle_due_date_visibility()
         self._update_selected_room_ui()
+        self._render_work_history()
         self._render_history()
 
+    def _migrate_assignee_fields(self):
+        """Unify assignee keys so stale legacy values do not reappear in UI."""
+        changed = False
+        migrated = []
+
+        for note in self.all_notes:
+            n = note if isinstance(note, dict) else {}
+
+            val_assigned_to = _safe_text(n.get("assigned_to", "")).strip()
+            val_assignedTo = _safe_text(n.get("assignedTo", "")).strip()
+            val_assigned = _safe_text(n.get("assigned", "")).strip()
+            val_assignee = _safe_text(n.get("assignee", "")).strip()
+
+            # Pick best non-empty value with preference to assigned_to then assignedTo.
+            merged = val_assigned_to or val_assignedTo or val_assigned or val_assignee
+
+            if _safe_text(n.get("assignedTo", "")).strip() != merged:
+                n["assignedTo"] = merged
+                changed = True
+            if _safe_text(n.get("assigned_to", "")).strip() != merged:
+                n["assigned_to"] = merged
+                changed = True
+
+            # Remove extra legacy aliases to prevent future conflicts.
+            if "assigned" in n:
+                try:
+                    del n["assigned"]
+                    changed = True
+                except Exception:
+                    pass
+            if "assignee" in n:
+                try:
+                    del n["assignee"]
+                    changed = True
+                except Exception:
+                    pass
+
+            migrated.append(n)
+
+        if changed:
+            self.all_notes = migrated
+
+        return changed
+
+    def _ensure_note_ids(self):
+        """Guarantee each note has a unique stable id so card actions work correctly.
+        Fixes both missing IDs and duplicate IDs (which arise when notes were bulk-stamped
+        in the same microsecond on a first run with no existing IDs)."""
+        changed = False
+        seen_ids = set()
+        for i, note in enumerate(self.all_notes):
+            raw = note if isinstance(note, dict) else {}
+            existing = _safe_text(raw.get("id", "")).strip()
+            # Assign a new ID if missing OR if this ID was already seen (duplicate).
+            if not existing or existing in seen_ids:
+                raw["id"] = "N%s_%d" % (datetime.datetime.now().strftime("%Y%m%d%H%M%S%f"), i)
+                self.all_notes[i] = raw
+                changed = True
+                seen_ids.add(raw["id"])
+            else:
+                seen_ids.add(existing)
+        return changed
+
     def _save_config(self):
-        self.config["customAssignees"] = list(self.custom_assignees)
         self.config["manualResolvedRooms"] = sorted(list(self.manual_resolved_rooms))
+        self.config["lastCustomAssignee"] = _safe_text(self.last_custom_assignee).strip()
         save_redline_config(self.config)
 
+    def _remember_custom_assignee(self, value):
+        clean = _safe_text(value).strip()
+        if not clean:
+            return
+
+        changed = False
+        if clean not in self.custom_assignees:
+            self.custom_assignees.append(clean)
+            self.custom_assignees = sorted(list(set(self.custom_assignees)))
+            changed = True
+
+        if clean != self.last_custom_assignee:
+            self.last_custom_assignee = clean
+            changed = True
+
+        if changed:
+            self._save_config()
+
     def _wire_events(self):
+        self.tutorialButton.Click += self.on_open_tutorial
         self.addNoteButton.Click += self.on_add_note
+        self.addWorkItemButton.Click += self.on_add_work_item
+        self.updateButton.Click += self.on_open_update_info
+        self.calendarWorkButton.Click += self.on_pick_work_day
         self.exportButton.Click += self.on_export
+        self.bulkAssignButton.Click += self.on_bulk_assign
+        self.bulkTypeButton.Click += self.on_bulk_type
         self.weeklyDigestButton.Click += self.on_weekly_digest_export
         self.exportTeamButton.Click += self.on_export_for_team_member
         self.importTeamButton.Click += self.on_import_team_file
@@ -911,6 +1160,7 @@ class RedlineWindow(forms.WPFWindow):
         self.toggleDeletedButton.Click += self.on_toggle_deleted
 
         self.noteText.KeyDown += self.on_note_text_keydown
+        self.workTodayText.KeyDown += self.on_work_text_keydown
         self.PreviewKeyDown += self.on_window_keydown
 
     def _purge_deleted_notes(self):
@@ -934,23 +1184,40 @@ class RedlineWindow(forms.WPFWindow):
         return changed
 
     def _active_notes(self):
-        return [n for n in self.all_notes if not bool(_normalize_note(n).get("deleted", False))]
+        active = []
+        for note in self.all_notes:
+            raw = note if isinstance(note, dict) else {}
+            if not bool(raw.get("deleted", False)):
+                active.append(note)
+        return active
 
     def _deleted_notes(self):
-        return [n for n in self.all_notes if bool(_normalize_note(n).get("deleted", False))]
+        deleted = []
+        for note in self.all_notes:
+            raw = note if isinstance(note, dict) else {}
+            if bool(raw.get("deleted", False)):
+                deleted.append(note)
+        return deleted
 
     def _room_is_resolved(self, room):
         if not room:
             return False
 
         room_id = _safe_text(room.get("roomId"))
+        if room_id in self._room_resolved_cache:
+            return bool(self._room_resolved_cache.get(room_id))
+
         if room_id in self.manual_resolved_rooms:
             return True
 
-        room_notes = [
-            _normalize_note(n) for n in self._active_notes()
-            if _safe_text(_normalize_note(n).get("roomId")) == room_id
-        ]
+        room_notes = []
+        for note in self.all_notes:
+            n = _normalize_note(note)
+            if bool(n.get("deleted", False)):
+                continue
+            if _safe_text(n.get("roomId")) == room_id:
+                room_notes.append(n)
+
         action_items = [n for n in room_notes if _normalize_category(n.get("category")) == "Action Item"]
         if not action_items:
             return False
@@ -959,6 +1226,35 @@ class RedlineWindow(forms.WPFWindow):
             if not bool(item.get("completed", False)):
                 return False
         return True
+
+    def _rebuild_room_resolved_cache(self, normalized_active=None):
+        notes = normalized_active if normalized_active is not None else [_normalize_note(n) for n in self._active_notes()]
+
+        action_totals = {}
+        action_open = {}
+        for n in notes:
+            rid = _safe_text(n.get("roomId", ""))
+            if not rid:
+                continue
+            if _normalize_category(n.get("category")) != "Action Item":
+                continue
+
+            action_totals[rid] = int(action_totals.get(rid, 0)) + 1
+            if not bool(n.get("completed", False)):
+                action_open[rid] = int(action_open.get(rid, 0)) + 1
+
+        cache = {}
+        for r in self.rooms:
+            rid = _safe_text(r.get("roomId", ""))
+            if not rid:
+                continue
+            if rid in self.manual_resolved_rooms:
+                cache[rid] = True
+            else:
+                total = int(action_totals.get(rid, 0))
+                cache[rid] = bool(total > 0 and int(action_open.get(rid, 0)) == 0)
+
+        self._room_resolved_cache = cache
 
     def _room_label(self, room):
         base = _safe_text(room.get("roomDisplay", "Unknown Room"))
@@ -970,17 +1266,17 @@ class RedlineWindow(forms.WPFWindow):
         self.roomCombo.Items.Clear()
         self.room_lookup = {}
 
-        if not self.rooms:
-            self.roomCombo.Items.Add("No rooms found")
-            self.roomCombo.SelectedIndex = 0
-            self.roomCombo.IsEnabled = False
-            return
+        general_room = unassigned_room_bucket()
+        general_label = _safe_text(general_room.get("roomDisplay", ""))
+        self.room_lookup[general_label] = general_room
+        self.roomCombo.Items.Add(general_label)
 
         for room in self.rooms:
             label = self._room_label(room)
             self.room_lookup[label] = room
             self.roomCombo.Items.Add(label)
 
+        self.roomCombo.IsEnabled = True
         self.roomCombo.SelectedIndex = 0
         self.selected_room = self.room_lookup.get(_safe_text(self.roomCombo.SelectedItem))
 
@@ -998,7 +1294,7 @@ class RedlineWindow(forms.WPFWindow):
             self.assignedToCombo.Items.Add(name)
 
         if self.custom_assignees:
-            self.assignedToCombo.Items.Add("--- Custom Names ---")
+            self.assignedToCombo.Items.Add("--- Saved Custom Names ---")
             for name in self.custom_assignees:
                 self.assignedToCombo.Items.Add("Custom: %s" % name)
 
@@ -1016,6 +1312,8 @@ class RedlineWindow(forms.WPFWindow):
         show = (selected == "Custom...")
         self.assignedToCustomText.Visibility = Visibility.Visible if show else Visibility.Collapsed
         self.addCustomAssigneeButton.Visibility = Visibility.Visible if show else Visibility.Collapsed
+        if show and not _safe_text(self.assignedToCustomText.Text).strip() and self.last_custom_assignee:
+            self.assignedToCustomText.Text = self.last_custom_assignee
         if not show:
             self.assignedToCustomText.Text = ""
 
@@ -1052,11 +1350,13 @@ class RedlineWindow(forms.WPFWindow):
             self.dueDatePanel.Visibility = Visibility.Collapsed
             self.dueDatePicker.SelectedDate = None
 
-    def _filtered_notes(self, include_completed=True, include_deleted=False):
+    def _filtered_notes(self, include_completed=True, include_deleted=False, pre_normalized=None):
         selected_room = _safe_text(self.historyFilterCombo.SelectedItem)
         search_text = _safe_text(self.historySearchBox.Text).strip().lower()
 
-        if include_deleted:
+        if pre_normalized is not None:
+            notes = list(pre_normalized)
+        elif include_deleted:
             notes = [_normalize_note(n) for n in self._deleted_notes()]
         else:
             notes = [_normalize_note(n) for n in self._active_notes()]
@@ -1065,8 +1365,8 @@ class RedlineWindow(forms.WPFWindow):
             notes = [n for n in notes if (_safe_text(n.get("roomDisplay", "Unknown Room")) or "Unknown Room") == selected_room]
 
         if self.active_tab != "All":
-            if self.active_tab == "Unassigned":
-                notes = [n for n in notes if _safe_text(n.get("roomId")) == UNASSIGNED_ROOM_ID]
+            if self.active_tab == "Pending":
+                notes = [n for n in notes if bool(n.get("pending", False)) and not bool(n.get("completed", False))]
             else:
                 notes = [n for n in notes if _normalize_category(n.get("category")) == self.active_tab]
 
@@ -1106,12 +1406,18 @@ class RedlineWindow(forms.WPFWindow):
     def _set_active_tab(self, tab_name):
         self.active_tab = tab_name if tab_name in CATEGORY_TAB_OPTIONS else "All"
         self._update_tab_visuals()
-        self._render_history()
+        try:
+            self._render_history()
+        except Exception as ex:
+            forms.alert(
+                "Could not refresh this tab.\n%s\n\n%s" % (_safe_text(ex), traceback.format_exc()),
+                warn_icon=True
+            )
 
     def _set_tab_button_style(self, button, is_active):
-        button.Background = _brush("#F59E0B") if is_active else _brush("#262626")
+        button.Background = _brush("#F59E0B") if is_active else _brush(THEME_BUTTON_BG)
         button.Foreground = _brush("#111111") if is_active else _brush("#F3F4F6")
-        button.BorderBrush = _brush("#D97706") if is_active else _brush("#3F3F46")
+        button.BorderBrush = _brush("#D97706") if is_active else _brush(THEME_BUTTON_BORDER)
 
     def _update_tab_visuals(self):
         self._set_tab_button_style(self.tabAllButton, self.active_tab == "All")
@@ -1119,7 +1425,7 @@ class RedlineWindow(forms.WPFWindow):
         self._set_tab_button_style(self.tabQuestionButton, self.active_tab == "Question")
         self._set_tab_button_style(self.tabDecisionButton, self.active_tab == "Decision")
         self._set_tab_button_style(self.tabObservationButton, self.active_tab == "Observation")
-        self._set_tab_button_style(self.tabUnassignedButton, self.active_tab == "Unassigned")
+        self._set_tab_button_style(self.tabUnassignedButton, self.active_tab == "Pending")
 
     def _update_toggle_button_text(self):
         self.toggleCompletedButton.Content = "Hide Completed" if self.show_completed else "Show Completed"
@@ -1164,6 +1470,90 @@ class RedlineWindow(forms.WPFWindow):
         self.roomSummaryText.Text = "Redlines: %s | Completed: %s | Open Action Items: %s" % (total, completed, open_actions)
         self.toggleRoomResolvedButton.Content = "Unmark Room Resolved" if _safe_text(room.get("roomId")) in self.manual_resolved_rooms else "Mark Room Resolved"
 
+    def _build_comments_stack(self, note):
+        comments = note.get("comments", []) if isinstance(note.get("comments", []), list) else []
+
+        comments_stack = StackPanel()
+
+        add_row = Grid()
+        add_row.ColumnDefinitions.Add(ColumnDefinition())
+        add_row.ColumnDefinitions.Add(ColumnDefinition())
+        add_row.ColumnDefinitions[1].Width = GridLength.Auto
+
+        comment_input = TextBox()
+        comment_input.MinHeight = 28
+        comment_input.Margin = Thickness(0, 0, 8, 0)
+        comment_input.Background = _brush(THEME_INPUT_BG)
+        comment_input.Foreground = _brush("#F3F4F6")
+        comment_input.BorderBrush = _brush(THEME_BUTTON_BORDER)
+        comment_input.Tag = note.get("id")
+        Grid.SetColumn(comment_input, 0)
+        add_row.Children.Add(comment_input)
+
+        add_comment_btn = Button()
+        add_comment_btn.Content = "Add Comment"
+        add_comment_btn.Tag = comment_input
+        add_comment_btn.Padding = Thickness(8, 3, 8, 3)
+        add_comment_btn.Background = _brush(THEME_BUTTON_BG)
+        add_comment_btn.Foreground = _brush("#F3F4F6")
+        add_comment_btn.BorderBrush = _brush(THEME_BUTTON_BORDER)
+        add_comment_btn.Click += self.on_add_comment
+        Grid.SetColumn(add_comment_btn, 1)
+        add_row.Children.Add(add_comment_btn)
+
+        comments_stack.Children.Add(add_row)
+
+        comments_list = sorted(
+            comments,
+            key=lambda c: _parse_note_datetime(_safe_text(c.get("timestamp", ""))),
+            reverse=True
+        )
+        for c in comments_list:
+            c_ts = _safe_text(c.get("timestamp", ""))
+            c_author = _safe_text(c.get("author", ""))
+            c_txt = _safe_text(c.get("text", ""))
+
+            item_border = Border()
+            item_border.Margin = Thickness(0, 6, 0, 0)
+            item_border.Padding = Thickness(6)
+            item_border.Background = _brush(THEME_PANEL_BG)
+            item_border.BorderBrush = _brush(THEME_PANEL_BORDER)
+            item_border.BorderThickness = Thickness(1)
+
+            item_stack = StackPanel()
+
+            item_meta = TextBlock()
+            if c_author:
+                item_meta.Text = "%s | %s" % (c_ts, c_author)
+            else:
+                item_meta.Text = c_ts
+            item_meta.FontSize = 10
+            item_meta.Foreground = _brush("#9CA3AF")
+            item_stack.Children.Add(item_meta)
+
+            item_text = TextBlock()
+            item_text.Text = c_txt
+            item_text.TextWrapping = TextWrapping.Wrap
+            item_text.Foreground = _brush("#E5E7EB")
+            item_text.Margin = Thickness(0, 2, 0, 0)
+            item_stack.Children.Add(item_text)
+
+            item_border.Child = item_stack
+            comments_stack.Children.Add(item_border)
+
+        return comments_stack
+
+    def on_comments_expander_expanded(self, sender, args):
+        payload = sender.Tag if isinstance(sender.Tag, dict) else {}
+        if bool(payload.get("loaded", False)):
+            return
+
+        note = payload.get("note") if isinstance(payload, dict) else None
+        note = note if isinstance(note, dict) else {}
+        sender.Content = self._build_comments_stack(note)
+        payload["loaded"] = True
+        sender.Tag = payload
+
     def _make_note_card(self, note, deleted_mode=False):
         category = _normalize_category(note.get("category", "Observation"))
         comments_count = len(note.get("comments", [])) if isinstance(note.get("comments", []), list) else 0
@@ -1171,7 +1561,7 @@ class RedlineWindow(forms.WPFWindow):
         card = Border()
         card.Margin = Thickness(2, 0, 2, 8)
         card.Padding = Thickness(10)
-        card.Background = _brush("#111111")
+        card.Background = _brush(THEME_CARD_BG)
         card.BorderBrush = _brush(BADGE_COLORS.get(category, "#6B7280"))
         card.BorderThickness = Thickness(3, 0, 0, 0)
 
@@ -1238,9 +1628,51 @@ class RedlineWindow(forms.WPFWindow):
             action_wrap = StackPanel()
             action_wrap.Orientation = Orientation.Horizontal
 
+            room_btn = Button()
+            room_btn.Content = "Room"
+            room_btn.Width = 48
+            room_btn.Height = 22
+            room_btn.Padding = Thickness(0)
+            room_btn.Margin = Thickness(0, 0, 6, 0)
+            room_btn.HorizontalAlignment = HorizontalAlignment.Right
+            room_btn.Tag = note.get("id")
+            room_btn.Background = _brush("#374151")
+            room_btn.Foreground = _brush("#E5E7EB")
+            room_btn.BorderBrush = _brush("#4B5563")
+            room_btn.Click += self.on_reassign_note_room
+            action_wrap.Children.Add(room_btn)
+
+            who_btn = Button()
+            who_btn.Content = "Who"
+            who_btn.Width = 40
+            who_btn.Height = 22
+            who_btn.Padding = Thickness(0)
+            who_btn.Margin = Thickness(0, 0, 6, 0)
+            who_btn.HorizontalAlignment = HorizontalAlignment.Right
+            who_btn.Tag = note.get("id")
+            who_btn.Background = _brush("#334155")
+            who_btn.Foreground = _brush("#E5E7EB")
+            who_btn.BorderBrush = _brush("#475569")
+            who_btn.Click += self.on_reassign_note_assignee
+            action_wrap.Children.Add(who_btn)
+
+            type_btn = Button()
+            type_btn.Content = "Type"
+            type_btn.Width = 44
+            type_btn.Height = 22
+            type_btn.Padding = Thickness(0)
+            type_btn.Margin = Thickness(0, 0, 6, 0)
+            type_btn.HorizontalAlignment = HorizontalAlignment.Right
+            type_btn.Tag = note.get("id")
+            type_btn.Background = _brush("#3F3F46")
+            type_btn.Foreground = _brush("#F3F4F6")
+            type_btn.BorderBrush = _brush("#52525B")
+            type_btn.Click += self.on_reassign_note_category
+            action_wrap.Children.Add(type_btn)
+
             edit_btn = Button()
-            edit_btn.Content = "E"
-            edit_btn.Width = 22
+            edit_btn.Content = "Edit"
+            edit_btn.Width = 40
             edit_btn.Height = 22
             edit_btn.Padding = Thickness(0)
             edit_btn.Margin = Thickness(0, 0, 6, 0)
@@ -1253,8 +1685,8 @@ class RedlineWindow(forms.WPFWindow):
             action_wrap.Children.Add(edit_btn)
 
             dup_btn = Button()
-            dup_btn.Content = "D"
-            dup_btn.Width = 22
+            dup_btn.Content = "Dup"
+            dup_btn.Width = 38
             dup_btn.Height = 22
             dup_btn.Padding = Thickness(0)
             dup_btn.Margin = Thickness(0, 0, 6, 0)
@@ -1267,8 +1699,8 @@ class RedlineWindow(forms.WPFWindow):
             action_wrap.Children.Add(dup_btn)
 
             delete_btn = Button()
-            delete_btn.Content = "X"
-            delete_btn.Width = 22
+            delete_btn.Content = "Del"
+            delete_btn.Width = 36
             delete_btn.Height = 22
             delete_btn.Padding = Thickness(0)
             delete_btn.HorizontalAlignment = HorizontalAlignment.Right
@@ -1328,75 +1760,16 @@ class RedlineWindow(forms.WPFWindow):
             else:
                 comments_expander.Header = "Add Context"
 
-            comments_stack = StackPanel()
-
-            add_row = Grid()
-            add_row.ColumnDefinitions.Add(ColumnDefinition())
-            add_row.ColumnDefinitions.Add(ColumnDefinition())
-            add_row.ColumnDefinitions[1].Width = GridLength.Auto
-
-            comment_input = TextBox()
-            comment_input.MinHeight = 28
-            comment_input.Margin = Thickness(0, 0, 8, 0)
-            comment_input.Background = _brush("#0D0D0D")
-            comment_input.Foreground = _brush("#F3F4F6")
-            comment_input.BorderBrush = _brush("#3F3F46")
-            comment_input.Tag = note.get("id")
-            Grid.SetColumn(comment_input, 0)
-            add_row.Children.Add(comment_input)
-
-            add_comment_btn = Button()
-            add_comment_btn.Content = "Add Comment"
-            add_comment_btn.Tag = comment_input
-            add_comment_btn.Padding = Thickness(8, 3, 8, 3)
-            add_comment_btn.Background = _brush("#262626")
-            add_comment_btn.Foreground = _brush("#F3F4F6")
-            add_comment_btn.BorderBrush = _brush("#3F3F46")
-            add_comment_btn.Click += self.on_add_comment
-            Grid.SetColumn(add_comment_btn, 1)
-            add_row.Children.Add(add_comment_btn)
-
-            comments_stack.Children.Add(add_row)
-
-            comments_list = sorted(
-                comments,
-                key=lambda c: _parse_note_datetime(_safe_text(c.get("timestamp", ""))),
-                reverse=True
-            )
-            for c in comments_list:
-                c_ts = _safe_text(c.get("timestamp", ""))
-                c_author = _safe_text(c.get("author", ""))
-                c_txt = _safe_text(c.get("text", ""))
-
-                item_border = Border()
-                item_border.Margin = Thickness(0, 6, 0, 0)
-                item_border.Padding = Thickness(6)
-                item_border.Background = _brush("#171717")
-                item_border.BorderBrush = _brush("#262626")
-                item_border.BorderThickness = Thickness(1)
-
-                item_stack = StackPanel()
-
-                item_meta = TextBlock()
-                if c_author:
-                    item_meta.Text = "%s | %s" % (c_ts, c_author)
-                else:
-                    item_meta.Text = c_ts
-                item_meta.FontSize = 10
-                item_meta.Foreground = _brush("#9CA3AF")
-                item_stack.Children.Add(item_meta)
-
-                item_text = TextBlock()
-                item_text.Text = c_txt
-                item_text.TextWrapping = TextWrapping.Wrap
-                item_text.Foreground = _brush("#E5E7EB")
-                item_text.Margin = Thickness(0, 2, 0, 0)
-                item_stack.Children.Add(item_text)
-
-                item_border.Child = item_stack
-                comments_stack.Children.Add(item_border)
-
-            comments_expander.Content = comments_stack
+            comments_expander.Tag = {
+                "note": note,
+                "loaded": False
+            }
+            comments_placeholder = TextBlock()
+            comments_placeholder.Text = "Expand to view and add comments"
+            comments_placeholder.Margin = Thickness(0, 4, 0, 4)
+            comments_placeholder.Foreground = _brush("#9CA3AF")
+            comments_expander.Content = comments_placeholder
+            comments_expander.Expanded += self.on_comments_expander_expanded
             content.Children.Add(comments_expander)
 
         if deleted_mode:
@@ -1427,18 +1800,78 @@ class RedlineWindow(forms.WPFWindow):
 
             content.Children.Add(actions)
         else:
+            checkbox_row = StackPanel()
+            checkbox_row.Orientation = Orientation.Horizontal
+
             box = CheckBox()
-            box.Margin = Thickness(0, 2, 0, 0)
+            box.Margin = Thickness(0, 2, 8, 0)
             box.Content = "Mark complete"
             box.IsChecked = bool(note.get("completed", False))
             box.Tag = note.get("id")
             box.Foreground = _brush("#D4D4D8")
             box.Checked += self.on_note_toggled
             box.Unchecked += self.on_note_toggled
-            content.Children.Add(box)
+            checkbox_row.Children.Add(box)
+
+            pending_box = CheckBox()
+            pending_box.Margin = Thickness(0, 2, 0, 0)
+            pending_box.Content = "Mark pending"
+            pending_box.IsChecked = bool(note.get("pending", False))
+            pending_box.Tag = note.get("id")
+            pending_box.Foreground = _brush("#F59E0B")
+            pending_box.Checked += self.on_note_pending_toggled
+            pending_box.Unchecked += self.on_note_pending_toggled
+            checkbox_row.Children.Add(pending_box)
+
+            content.Children.Add(checkbox_row)
 
         card.Child = content
         return card
+
+    def on_room_expander_expanded(self, sender, args):
+        payload = sender.Tag if isinstance(sender.Tag, dict) else {}
+        if bool(payload.get("loaded", False)):
+            return
+
+        notes = payload.get("openNotes") if isinstance(payload.get("openNotes"), list) else []
+        room_stack = StackPanel()
+
+        if notes:
+            for note in notes:
+                try:
+                    room_stack.Children.Add(self._make_note_card(note, deleted_mode=False))
+                except Exception as ex:
+                    bad = TextBlock()
+                    bad.Text = "Could not render one note: %s" % _safe_text(ex)
+                    bad.Margin = Thickness(6, 2, 6, 6)
+                    bad.Foreground = _brush("#FCA5A5")
+                    room_stack.Children.Add(bad)
+        else:
+            empty_room = TextBlock()
+            empty_room.Text = "No open items in this room."
+            empty_room.Foreground = _brush("#737373")
+            empty_room.Margin = Thickness(6, 2, 6, 6)
+            room_stack.Children.Add(empty_room)
+
+        sender.Content = room_stack
+        payload["loaded"] = True
+        sender.Tag = payload
+
+    def on_room_expander_collapsed(self, sender, args):
+        payload = sender.Tag if isinstance(sender.Tag, dict) else {}
+        if not isinstance(payload, dict):
+            return
+
+        if not bool(payload.get("loaded", False)):
+            return
+
+        placeholder = TextBlock()
+        placeholder.Text = "Expand to view notes"
+        placeholder.Margin = Thickness(6, 2, 6, 6)
+        placeholder.Foreground = _brush("#737373")
+        sender.Content = placeholder
+        payload["loaded"] = False
+        sender.Tag = payload
 
     def _render_history(self):
         self.historyPanel.Children.Clear()
@@ -1447,11 +1880,21 @@ class RedlineWindow(forms.WPFWindow):
             self._save()
             self._bind_history_filter()
 
-        total, action_items, completed = self._global_stats()
+        active_normalized = [_normalize_note(n) for n in self._active_notes()]
+        deleted_normalized = [_normalize_note(n) for n in self._deleted_notes()]
+        self._rebuild_room_resolved_cache(active_normalized)
+
+        room_display_to_id = {}
+        for r in self.rooms:
+            room_display_to_id[_safe_text(r.get("roomDisplay", ""))] = _safe_text(r.get("roomId", ""))
+
+        total = len(active_normalized)
+        action_items = len([n for n in active_normalized if _normalize_category(n.get("category")) == "Action Item"])
+        completed = len([n for n in active_normalized if bool(n.get("completed", False))])
         self.historyGlobalSummaryText.Text = "Total notes: %s | Action items: %s | Completed: %s" % (total, action_items, completed)
         self._update_toggle_button_text()
 
-        all_filtered_active = self._filtered_notes(include_completed=True, include_deleted=False)
+        all_filtered_active = self._filtered_notes(include_completed=True, include_deleted=False, pre_normalized=active_normalized)
         grouped_all = self._group_notes_by_room(all_filtered_active)
 
         if not grouped_all:
@@ -1461,42 +1904,45 @@ class RedlineWindow(forms.WPFWindow):
             empty.Foreground = _brush("#A3A3A3")
             self.historyPanel.Children.Add(empty)
         else:
+            auto_expand_rooms_left = 2
             for room_label in sorted(grouped_all.keys()):
                 room_notes_all = grouped_all[room_label]
                 room_notes_open = [n for n in room_notes_all if not bool(n.get("completed", False))]
                 open_count = len(room_notes_open)
 
                 resolved_badge = ""
-                room_obj = None
-                for r in self.rooms:
-                    if _safe_text(r.get("roomDisplay")) == room_label:
-                        room_obj = r
-                        break
-                if room_obj and self._room_is_resolved(room_obj):
+                rid = room_display_to_id.get(room_label, "")
+                if rid and bool(self._room_resolved_cache.get(rid, False)):
                     resolved_badge = " [CHECK]"
 
                 exp = Expander()
                 exp.Header = "%s%s (Open: %s, Total: %s)" % (room_label, resolved_badge, open_count, len(room_notes_all))
                 exp.Margin = Thickness(0, 0, 0, 8)
                 exp.Foreground = _brush("#F3F4F6")
-                exp.IsExpanded = True if open_count > 0 else False
+                exp.Tag = {
+                    "openNotes": room_notes_open,
+                    "loaded": False
+                }
 
-                room_stack = StackPanel()
-                if room_notes_open:
-                    for note in room_notes_open:
-                        room_stack.Children.Add(self._make_note_card(note, deleted_mode=False))
+                placeholder = TextBlock()
+                placeholder.Text = "Expand to view notes"
+                placeholder.Margin = Thickness(6, 2, 6, 6)
+                placeholder.Foreground = _brush("#737373")
+                exp.Content = placeholder
+
+                exp.Expanded += self.on_room_expander_expanded
+                exp.Collapsed += self.on_room_expander_collapsed
+
+                if open_count > 0 and auto_expand_rooms_left > 0:
+                    exp.IsExpanded = True
+                    auto_expand_rooms_left -= 1
                 else:
-                    empty_room = TextBlock()
-                    empty_room.Text = "No open items in this room."
-                    empty_room.Foreground = _brush("#737373")
-                    empty_room.Margin = Thickness(6, 2, 6, 6)
-                    room_stack.Children.Add(empty_room)
+                    exp.IsExpanded = False
 
-                exp.Content = room_stack
                 self.room_expanders.append(exp)
                 self.historyPanel.Children.Add(exp)
 
-        completed_notes = [n for n in self._filtered_notes(include_completed=True, include_deleted=False) if bool(n.get("completed", False))]
+        completed_notes = [n for n in all_filtered_active if bool(n.get("completed", False))]
         completed_expander = Expander()
         completed_expander.Header = "Completed (%s)" % len(completed_notes)
         completed_expander.Margin = Thickness(0, 6, 0, 8)
@@ -1504,12 +1950,13 @@ class RedlineWindow(forms.WPFWindow):
         completed_expander.IsExpanded = False
         completed_expander.Visibility = Visibility.Visible if self.show_completed else Visibility.Collapsed
         completed_stack = StackPanel()
-        for note in completed_notes:
-            completed_stack.Children.Add(self._make_note_card(note, deleted_mode=False))
+        if self.show_completed:
+            for note in completed_notes:
+                completed_stack.Children.Add(self._make_note_card(note, deleted_mode=False))
         completed_expander.Content = completed_stack
         self.historyPanel.Children.Add(completed_expander)
 
-        deleted_notes = self._filtered_notes(include_completed=True, include_deleted=True)
+        deleted_notes = self._filtered_notes(include_completed=True, include_deleted=True, pre_normalized=deleted_normalized)
         deleted_expander = Expander()
         deleted_expander.Header = "Deleted Items (%s, auto-purge 7 days)" % len(deleted_notes)
         deleted_expander.Margin = Thickness(0, 2, 0, 6)
@@ -1517,20 +1964,27 @@ class RedlineWindow(forms.WPFWindow):
         deleted_expander.IsExpanded = False
         deleted_expander.Visibility = Visibility.Visible if self.show_deleted else Visibility.Collapsed
         deleted_stack = StackPanel()
-        for note in deleted_notes:
-            deleted_stack.Children.Add(self._make_note_card(note, deleted_mode=True))
+        if self.show_deleted:
+            for note in deleted_notes:
+                deleted_stack.Children.Add(self._make_note_card(note, deleted_mode=True))
         deleted_expander.Content = deleted_stack
         self.historyPanel.Children.Add(deleted_expander)
 
     def _save(self):
-        ok = save_notes(self.store_path, self.doc.Title, self.all_notes)
+        ok = save_notes(self.store_path, self.doc.Title, self.all_notes, self.work_log_items, self.custom_assignees)
         if not ok:
             forms.alert("Could not write redline file. Check folder permissions for project folder or Documents/DatumNotes.", warn_icon=True)
 
     def _set_active_tab(self, tab_name):
         self.active_tab = tab_name if tab_name in CATEGORY_TAB_OPTIONS else "All"
         self._update_tab_visuals()
-        self._render_history()
+        try:
+            self._render_history()
+        except Exception as ex:
+            forms.alert(
+                "Could not refresh this tab.\n%s\n\n%s" % (_safe_text(ex), traceback.format_exc()),
+                warn_icon=True
+            )
 
     def _selected_assignee_value(self):
         selected = _safe_text(self.assignedToCombo.SelectedItem).strip()
@@ -1549,14 +2003,64 @@ class RedlineWindow(forms.WPFWindow):
         if not value:
             return unassigned_room_bucket()
 
+        def _norm(text):
+            return re.sub(r"[^a-z0-9]+", " ", _safe_text(text).strip().lower()).strip()
+
+        value_norm = _norm(value)
+
+        # Pass 1: exact match against display/name/number (raw + normalized)
         for r in self.rooms:
-            display = _safe_text(r.get("roomDisplay", "")).lower()
-            name = _safe_text(r.get("name", "")).lower()
-            number = _safe_text(r.get("number", "")).lower()
-            if value == display or value == name or value == number:
+            display = _safe_text(r.get("roomDisplay", ""))
+            name = _safe_text(r.get("name", ""))
+            number = _safe_text(r.get("number", ""))
+
+            display_l = display.lower()
+            name_l = name.lower()
+            number_l = number.lower()
+
+            if value == display_l or value == name_l or value == number_l:
                 return r
-            if value in display:
+
+            if value_norm and (value_norm == _norm(display) or value_norm == _norm(name) or value_norm == _norm(number)):
                 return r
+
+        # Pass 2: partial containment both directions (raw + normalized)
+        partial_matches = []
+        for r in self.rooms:
+            display = _safe_text(r.get("roomDisplay", ""))
+            name = _safe_text(r.get("name", ""))
+            number = _safe_text(r.get("number", ""))
+
+            display_l = display.lower()
+            name_l = name.lower()
+            number_l = number.lower()
+
+            display_n = _norm(display)
+            name_n = _norm(name)
+            number_n = _norm(number)
+
+            raw_hit = (
+                (value in display_l or display_l in value) or
+                (value in name_l or name_l in value) or
+                (value in number_l or number_l in value)
+            )
+
+            norm_hit = False
+            if value_norm:
+                norm_hit = (
+                    (value_norm in display_n or display_n in value_norm) or
+                    (value_norm in name_n or name_n in value_norm) or
+                    (value_norm in number_n or number_n in value_norm)
+                )
+
+            if raw_hit or norm_hit:
+                # Prefer the shortest likely room label for cleaner fuzzy choice.
+                score = len(display) if display else 9999
+                partial_matches.append((score, r))
+
+        if partial_matches:
+            partial_matches.sort(key=lambda x: x[0])
+            return partial_matches[0][1]
 
         return unassigned_room_bucket()
 
@@ -1584,6 +2088,373 @@ class RedlineWindow(forms.WPFWindow):
     def _make_note_id(self):
         return "N%s" % datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
 
+    def _make_work_item_id(self):
+        return "W%s" % datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+
+    def _set_note_assignee(self, note_id, assignee_text):
+        """Update assignee on raw note payload to avoid legacy key conflicts."""
+        target_id = _safe_text(note_id)
+        if not target_id:
+            return False
+
+        updated = False
+        now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        assignee_value = _safe_text(assignee_text).strip()
+
+        for i, note in enumerate(self.all_notes):
+            raw = note if isinstance(note, dict) else {}
+            normalized = _normalize_note(raw)
+            if _safe_text(normalized.get("id")) != target_id:
+                continue
+
+            raw["assignedTo"] = assignee_value
+            raw["assigned_to"] = assignee_value
+            if "assigned" in raw:
+                try:
+                    del raw["assigned"]
+                except Exception:
+                    pass
+            if "assignee" in raw:
+                try:
+                    del raw["assignee"]
+                except Exception:
+                    pass
+
+            raw["editedAt"] = now_text
+            raw["editedBy"] = self.current_user
+            self.all_notes[i] = raw
+            updated = True
+
+        return updated
+
+    def _set_note_room(self, note_id, room_data):
+        """Update room fields on raw note payload so tab/filter state updates correctly."""
+        target_id = _safe_text(note_id)
+        if not target_id or not isinstance(room_data, dict):
+            return False
+
+        updated = False
+        now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for i, note in enumerate(self.all_notes):
+            raw = note if isinstance(note, dict) else {}
+            normalized = _normalize_note(raw)
+            if _safe_text(normalized.get("id")) != target_id:
+                continue
+
+            raw["roomId"] = _safe_text(room_data.get("roomId", ""))
+            raw["roomDisplay"] = _safe_text(room_data.get("roomDisplay", ""))
+            raw["roomNumber"] = _safe_text(room_data.get("number", ""))
+            raw["roomName"] = _safe_text(room_data.get("name", ""))
+            raw["level"] = _safe_text(room_data.get("level", ""))
+            raw["elementId"] = _safe_text(room_data.get("elementId", ""))
+
+            # Remove legacy aliases if present.
+            if "room_id" in raw:
+                try:
+                    del raw["room_id"]
+                except Exception:
+                    pass
+            if "room" in raw and isinstance(raw.get("room"), dict):
+                try:
+                    del raw["room"]
+                except Exception:
+                    pass
+
+            raw["editedAt"] = now_text
+            raw["editedBy"] = self.current_user
+            self.all_notes[i] = raw
+            updated = True
+
+        return updated
+
+    def _set_note_completed(self, note_id, checked):
+        """Update completion state directly on raw note payload by id."""
+        target_id = _safe_text(note_id)
+        if not target_id:
+            return False
+
+        updated = False
+        now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        completed_at = now_text if checked else ""
+        completed_by = self.current_user if checked else ""
+
+        for i, note in enumerate(self.all_notes):
+            raw = note if isinstance(note, dict) else {}
+            normalized = _normalize_note(raw)
+            if _safe_text(normalized.get("id")) != target_id:
+                continue
+
+            raw["completed"] = bool(checked)
+            raw["completedAt"] = completed_at
+            raw["completedBy"] = completed_by
+            # Completing a note clears pending.
+            if checked:
+                raw["pending"] = False
+            raw["editedAt"] = now_text
+            raw["editedBy"] = self.current_user
+
+            self.all_notes[i] = raw
+            updated = True
+            break  # IDs are unique; stop after finding the match.
+
+        return updated
+
+    def _set_note_pending(self, note_id, pending):
+        """Update pending state on raw note payload by id."""
+        target_id = _safe_text(note_id)
+        if not target_id:
+            return False
+
+        updated = False
+        now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for i, note in enumerate(self.all_notes):
+            raw = note if isinstance(note, dict) else {}
+            normalized = _normalize_note(raw)
+            if _safe_text(normalized.get("id")) != target_id:
+                continue
+
+            raw["pending"] = bool(pending)
+            # Marking pending clears completed.
+            if pending:
+                raw["completed"] = False
+                raw["completedAt"] = ""
+                raw["completedBy"] = ""
+            raw["editedAt"] = now_text
+            raw["editedBy"] = self.current_user
+
+            self.all_notes[i] = raw
+            updated = True
+            break
+
+        return updated
+
+    def _pick_bulk_note_ids(self, title_text):
+        """Pick multiple notes from the current filtered active set."""
+        notes = [_normalize_note(n) for n in self._filtered_notes(include_completed=True, include_deleted=False)]
+        if not notes:
+            forms.alert("No notes match the current filters.", warn_icon=True)
+            return []
+
+        labels = []
+        lookup = {}
+        for n in notes:
+            note_id = _safe_text(n.get("id", ""))
+            if not note_id:
+                continue
+
+            room_label = _safe_text(n.get("roomDisplay", "Unknown Room"))
+            cat_label = _normalize_category(n.get("category", "Observation"))
+            assigned = _safe_text(n.get("assignedTo", "")).strip() or "none"
+            body = _safe_text(n.get("text", "")).replace("\n", " ").strip()
+            if len(body) > 52:
+                body = body[:49] + "..."
+            label = "[%s] %s | %s | %s | %s" % (note_id[-6:], room_label, cat_label, assigned, body)
+            labels.append(label)
+            lookup[label] = note_id
+
+        picked = forms.SelectFromList.show(labels, title=title_text, button_name="Apply", multiselect=True)
+        if not picked:
+            return []
+
+        picked_ids = []
+        for p in picked:
+            pid = lookup.get(_safe_text(p), "")
+            if pid:
+                picked_ids.append(pid)
+        return picked_ids
+
+    def _describe_work_day(self, day_text):
+        day_dt = _parse_note_datetime(day_text)
+        if day_dt == datetime.datetime.min:
+            return day_text or "Unknown Day"
+
+        today = datetime.datetime.now().date()
+        if day_dt.date() == today:
+            return "Today"
+        if day_dt.date() == (today - datetime.timedelta(days=1)):
+            return "Yesterday"
+        return day_dt.strftime("%b %d, %Y")
+
+    def _work_items_sorted(self):
+        items = []
+        for raw_item in self.work_log_items:
+            item = _normalize_work_item(raw_item)
+            if item.get("text"):
+                items.append(item)
+        return sorted(items, key=lambda x: _parse_note_datetime(x.get("timestamp", "")), reverse=True)
+
+    def _work_items_grouped_by_day(self, items):
+        grouped = {}
+        for item in items:
+            day_text = _safe_text(item.get("day", "")).strip() or _safe_text(item.get("timestamp", ""))[:10]
+            grouped.setdefault(day_text, []).append(item)
+        return grouped
+
+    def _selected_work_items(self):
+        items = self._work_items_sorted()
+        if self.selected_work_day:
+            items = [x for x in items if _safe_text(x.get("day", "")) == self.selected_work_day]
+        return items
+
+    def _build_work_calendar_tooltip(self):
+        items = self._work_items_sorted()
+        if not items:
+            return "No work history yet."
+
+        grouped = self._work_items_grouped_by_day(items)
+        lines = ["Hover summary of saved work days:"]
+        for day_text in sorted(grouped.keys(), reverse=True)[:10]:
+            day_items = grouped[day_text]
+            lines.append("")
+            lines.append("%s (%s)" % (self._describe_work_day(day_text), len(day_items)))
+            for item in day_items[:3]:
+                stamp = _safe_text(item.get("timestamp", ""))[11:16]
+                body = _safe_text(item.get("text", "")).replace("\n", " ").strip()
+                if len(body) > 72:
+                    body = body[:69] + "..."
+                lines.append("  %s  %s" % (stamp or "--:--", body))
+            if len(day_items) > 3:
+                lines.append("  +%s more" % (len(day_items) - 3))
+        return "\n".join(lines)
+
+    def _make_work_item_card(self, item):
+        card = Border()
+        card.Margin = Thickness(2, 0, 2, 8)
+        card.Padding = Thickness(10)
+        card.Background = _brush(THEME_CARD_BG)
+        card.BorderBrush = _brush(THEME_PANEL_BORDER)
+        card.BorderThickness = Thickness(1)
+
+        content = StackPanel()
+
+        top_grid = Grid()
+        top_grid.ColumnDefinitions.Add(ColumnDefinition())
+        top_grid.ColumnDefinitions.Add(ColumnDefinition())
+        top_grid.ColumnDefinitions[1].Width = GridLength.Auto
+
+        stamp = TextBlock()
+        stamp.Text = _safe_text(item.get("timestamp", ""))
+        stamp.Foreground = _brush("#D4D4D8")
+        stamp.FontSize = 11
+        Grid.SetColumn(stamp, 0)
+        top_grid.Children.Add(stamp)
+
+        button_panel = StackPanel()
+        button_panel.Orientation = Orientation.Horizontal
+
+        edit_btn = Button()
+        edit_btn.Content = "Edit"
+        edit_btn.MinWidth = 52
+        edit_btn.Height = 24
+        edit_btn.Padding = Thickness(8, 1, 8, 1)
+        edit_btn.Margin = Thickness(0, 0, 4, 0)
+        edit_btn.Tag = item.get("id")
+        edit_btn.Background = _brush(THEME_BUTTON_BG)
+        edit_btn.Foreground = _brush("#F3F4F6")
+        edit_btn.BorderBrush = _brush(THEME_BUTTON_BORDER)
+        edit_btn.Click += self.on_edit_work_item
+        button_panel.Children.Add(edit_btn)
+
+        delete_btn = Button()
+        delete_btn.Content = "Delete"
+        delete_btn.MinWidth = 52
+        delete_btn.Height = 24
+        delete_btn.Padding = Thickness(8, 1, 8, 1)
+        delete_btn.Tag = item.get("id")
+        delete_btn.Background = _brush("#3F1D1D")
+        delete_btn.Foreground = _brush("#FEE2E2")
+        delete_btn.BorderBrush = _brush("#7F1D1D")
+        delete_btn.Click += self.on_delete_work_item
+        button_panel.Children.Add(delete_btn)
+
+        Grid.SetColumn(button_panel, 1)
+        top_grid.Children.Add(button_panel)
+
+        content.Children.Add(top_grid)
+
+        body = TextBlock()
+        body.Text = _safe_text(item.get("text", ""))
+        body.TextWrapping = TextWrapping.Wrap
+        body.Margin = Thickness(0, 8, 0, 0)
+        body.Foreground = _brush("#F3F4F6")
+        content.Children.Add(body)
+
+        edited_at = _safe_text(item.get("editedAt", "")).strip()
+        if edited_at:
+            meta = TextBlock()
+            meta.Text = "Edited %s" % edited_at
+            if _safe_text(item.get("editedBy", "")).strip():
+                meta.Text = "%s by %s" % (meta.Text, _safe_text(item.get("editedBy", "")))
+            meta.Margin = Thickness(0, 6, 0, 0)
+            meta.Foreground = _brush("#C4C4C4")
+            meta.FontSize = 11
+            content.Children.Add(meta)
+
+        card.Child = content
+        return card
+
+    def _add_work_day_group(self, host, day_text, items, expanded):
+        expander = Expander()
+        expander.Header = "%s (%s)" % (self._describe_work_day(day_text), len(items))
+        expander.Margin = Thickness(0, 0, 0, 8)
+        expander.Foreground = _brush("#F3F4F6")
+        expander.IsExpanded = expanded
+
+        stack = StackPanel()
+        for item in items:
+            stack.Children.Add(self._make_work_item_card(item))
+        expander.Content = stack
+        host.Children.Add(expander)
+
+    def _render_work_history(self):
+        self.workHistoryPanel.Children.Clear()
+        self.calendarWorkButton.ToolTip = self._build_work_calendar_tooltip()
+
+        items = self._selected_work_items()
+        if self.selected_work_day:
+            self.workHistoryMetaText.Text = "Viewing %s. Use Calendar to switch back to all days." % self._describe_work_day(self.selected_work_day)
+        else:
+            self.workHistoryMetaText.Text = "Recent work shows here. Items older than one week are grouped by default."
+
+        if not items:
+            empty = TextBlock()
+            empty.Text = "No work history yet. Add an item above to start tracking today’s focus."
+            empty.Margin = Thickness(6)
+            empty.Foreground = _brush("#C4C4C4")
+            self.workHistoryPanel.Children.Add(empty)
+            return
+
+        if self.selected_work_day:
+            self._add_work_day_group(self.workHistoryPanel, self.selected_work_day, items, True)
+            return
+
+        grouped = self._work_items_grouped_by_day(items)
+        cutoff = datetime.datetime.now() - datetime.timedelta(days=7)
+        older_groups = []
+
+        for day_text in sorted(grouped.keys(), reverse=True):
+            parsed = _parse_note_datetime(day_text)
+            is_recent = parsed != datetime.datetime.min and parsed >= cutoff
+            if is_recent:
+                self._add_work_day_group(self.workHistoryPanel, day_text, grouped[day_text], day_text == datetime.datetime.now().strftime("%Y-%m-%d"))
+            else:
+                older_groups.append((day_text, grouped[day_text]))
+
+        if older_groups:
+            older_expander = Expander()
+            older_expander.Header = "Older Than One Week (%s days)" % len(older_groups)
+            older_expander.Margin = Thickness(0, 4, 0, 8)
+            older_expander.Foreground = _brush("#F3F4F6")
+            older_expander.IsExpanded = False
+
+            older_stack = StackPanel()
+            for day_text, day_items in older_groups:
+                self._add_work_day_group(older_stack, day_text, day_items, False)
+            older_expander.Content = older_stack
+            self.workHistoryPanel.Children.Add(older_expander)
+
     def on_category_changed(self, sender, args):
         self._toggle_due_date_visibility()
 
@@ -1596,22 +2467,34 @@ class RedlineWindow(forms.WPFWindow):
             forms.alert("Enter a custom name first.", warn_icon=True)
             return
 
-        if value not in self.custom_assignees:
-            self.custom_assignees.append(value)
-            self.custom_assignees = sorted(list(set(self.custom_assignees)))
-            self._save_config()
+        self._remember_custom_assignee(value)
+        self._save()
 
         self._bind_assignees()
-        self.assignedToCombo.SelectedItem = "Custom: %s" % value
+        picked = "Custom: %s" % value
+        if picked in [ _safe_text(x) for x in self.assignedToCombo.Items ]:
+            self.assignedToCombo.SelectedItem = picked
+        else:
+            self.assignedToCombo.SelectedItem = "Custom..."
+            self.assignedToCustomText.Text = value
 
     def on_filter_changed(self, sender, args):
-        self._render_history()
+        try:
+            self._render_history()
+        except Exception as ex:
+            forms.alert("Could not refresh filter.\n%s\n\n%s" % (_safe_text(ex), traceback.format_exc()), warn_icon=True)
 
     def on_sort_changed(self, sender, args):
-        self._render_history()
+        try:
+            self._render_history()
+        except Exception as ex:
+            forms.alert("Could not apply sort.\n%s\n\n%s" % (_safe_text(ex), traceback.format_exc()), warn_icon=True)
 
     def on_search_changed(self, sender, args):
-        self._render_history()
+        try:
+            self._render_history()
+        except Exception as ex:
+            forms.alert("Could not refresh search.\n%s\n\n%s" % (_safe_text(ex), traceback.format_exc()), warn_icon=True)
 
     def on_tab_all(self, sender, args):
         self._set_active_tab("All")
@@ -1629,7 +2512,7 @@ class RedlineWindow(forms.WPFWindow):
         self._set_active_tab("Observation")
 
     def on_tab_unassigned(self, sender, args):
-        self._set_active_tab("Unassigned")
+        self._set_active_tab("Pending")
 
     def on_toggle_completed(self, sender, args):
         self.show_completed = not self.show_completed
@@ -1728,6 +2611,11 @@ class RedlineWindow(forms.WPFWindow):
         except Exception as ex:
             forms.alert("Could not navigate to room.\n%s" % _safe_text(ex), warn_icon=True)
 
+    def on_work_text_keydown(self, sender, args):
+        if args.Key == Key.Enter:
+            args.Handled = True
+            self.on_add_work_item(None, None)
+
     def on_note_text_keydown(self, sender, args):
         if args.Key == Key.Enter:
             args.Handled = True
@@ -1747,15 +2635,105 @@ class RedlineWindow(forms.WPFWindow):
             args.Handled = True
             self.historySearchBox.Focus()
 
-    def on_add_note(self, sender, args):
-        if not self.rooms:
-            forms.alert("No rooms found in this model.", warn_icon=True)
+    def on_add_work_item(self, sender, args):
+        work_text = _safe_text(self.workTodayText.Text).strip()
+        if not work_text:
+            forms.alert("Enter what you want to work on before logging it.", warn_icon=True)
             return
 
+        now = datetime.datetime.now()
+        item = {
+            "id": self._make_work_item_id(),
+            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "day": now.strftime("%Y-%m-%d"),
+            "text": work_text,
+            "author": self.current_user,
+            "editedAt": "",
+            "editedBy": ""
+        }
+
+        self.work_log_items.append(item)
+        self.selected_work_day = now.strftime("%Y-%m-%d")
+        self.workTodayText.Text = ""
+        self._save()
+        self._render_work_history()
+
+    def on_pick_work_day(self, sender, args):
+        items = self._work_items_sorted()
+        if not items:
+            forms.alert("No saved work days yet.", warn_icon=True)
+            return
+
+        grouped = self._work_items_grouped_by_day(items)
+        labels = ["All Days"]
+        lookup = {}
+        for day_text in sorted(grouped.keys(), reverse=True):
+            label = "%s (%s)" % (self._describe_work_day(day_text), len(grouped[day_text]))
+            lookup[label] = day_text
+            labels.append(label)
+
+        selected = forms.SelectFromList.show(labels, title="Work History Days", button_name="Show", multiselect=False)
+        if not selected:
+            return
+
+        if selected == "All Days":
+            self.selected_work_day = ""
+        else:
+            self.selected_work_day = lookup.get(_safe_text(selected), "")
+        self._render_work_history()
+
+    def on_edit_work_item(self, sender, args):
+        item_id = _safe_text(sender.Tag)
+        if not item_id:
+            return
+
+        for index, raw in enumerate(self.work_log_items):
+            item = _normalize_work_item(raw)
+            if _safe_text(item.get("id")) != item_id:
+                continue
+
+            updated_text = forms.ask_for_string(
+                default=_safe_text(item.get("text", "")),
+                prompt="Edit work history entry",
+                title="Edit Work Item"
+            )
+            if updated_text is None:
+                return
+
+            updated_text = _safe_text(updated_text).strip()
+            if not updated_text:
+                forms.alert("Work history text cannot be empty.", warn_icon=True)
+                return
+
+            item["text"] = updated_text
+            item["editedAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            item["editedBy"] = self.current_user
+            self.work_log_items[index] = item
+            self._save()
+            self._render_work_history()
+            return
+
+    def on_delete_work_item(self, sender, args):
+        item_id = _safe_text(sender.Tag)
+        if not item_id:
+            return
+
+        confirmed = forms.alert("Are you sure you want to delete this work item?", yes=True, no=True)
+        if not confirmed:
+            return
+
+        self.work_log_items = [item for item in self.work_log_items if _safe_text(_normalize_work_item(item).get("id")) != item_id]
+        self._save()
+        self._render_work_history()
+
+    def on_add_note(self, sender, args):
         selected_label = _safe_text(self.roomCombo.SelectedItem)
         note_text = _safe_text(self.noteText.Text).strip()
         category = _normalize_category(self.categoryCombo.SelectedItem)
         assigned_to = self._selected_assignee_value()
+        if _safe_text(self.assignedToCombo.SelectedItem).strip() == "Custom...":
+            self._remember_custom_assignee(assigned_to)
+            self._bind_assignees()
 
         due_date = ""
         if category == "Action Item":
@@ -1764,7 +2742,7 @@ class RedlineWindow(forms.WPFWindow):
                 due_date = "%04d-%02d-%02d" % (selected_due.Year, selected_due.Month, selected_due.Day)
 
         if not selected_label or selected_label not in self.room_lookup:
-            forms.alert("Please select a room.", warn_icon=True)
+            forms.alert("Please select a room or General.", warn_icon=True)
             return
 
         if not note_text:
@@ -1806,24 +2784,51 @@ class RedlineWindow(forms.WPFWindow):
         self._update_selected_room_ui()
 
         self.noteText.Text = ""
-        self.assignedToCustomText.Text = ""
+        if _safe_text(self.assignedToCombo.SelectedItem).strip() != "Custom...":
+            self.assignedToCustomText.Text = ""
         self.dueDatePicker.SelectedDate = None
         self._render_history()
 
     def on_note_toggled(self, sender, args):
         note_id = _safe_text(sender.Tag)
         checked = bool(sender.IsChecked)
-        completed_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") if checked else ""
-        completed_by = self.current_user if checked else ""
+        if not note_id:
+            forms.alert("This item is missing an ID and cannot be updated. Reopen the tool and try again.", warn_icon=True)
+            return
 
-        for i, note in enumerate(self.all_notes):
-            n = _normalize_note(note)
-            if _safe_text(n.get("id")) == note_id:
-                n["completed"] = checked
-                n["completedAt"] = completed_at
-                n["completedBy"] = completed_by
-                self.all_notes[i] = n
-                break
+        if not self._set_note_completed(note_id, checked):
+            forms.alert("Could not update completion for this note.", warn_icon=True)
+            return
+
+        self._save()
+        self._update_selected_room_ui()
+        self._render_history()
+
+    def on_note_pending_toggled(self, sender, args):
+        note_id = _safe_text(sender.Tag)
+        pending = bool(sender.IsChecked)
+        if not note_id:
+            forms.alert("This item is missing an ID and cannot be updated. Reopen the tool and try again.", warn_icon=True)
+            return
+
+        if not self._set_note_pending(note_id, pending):
+            forms.alert("Could not update pending state for this note.", warn_icon=True)
+            return
+
+        self._save()
+        self._update_selected_room_ui()
+        self._render_history()
+
+    def on_note_pending_toggled(self, sender, args):
+        note_id = _safe_text(sender.Tag)
+        pending = bool(sender.IsChecked)
+        if not note_id:
+            forms.alert("This item is missing an ID and cannot be updated. Reopen the tool and try again.", warn_icon=True)
+            return
+
+        if not self._set_note_pending(note_id, pending):
+            forms.alert("Could not update pending state for this note.", warn_icon=True)
+            return
 
         self._save()
         self._update_selected_room_ui()
@@ -1920,18 +2925,406 @@ class RedlineWindow(forms.WPFWindow):
             if due_date is None:
                 return
 
+        current_room_display = _safe_text(current.get("roomDisplay", "")).strip()
+        room_options = ["Keep Current Room"]
+        room_lookup = {"Keep Current Room": None}
+
+        unassigned_label = UNASSIGNED_ROOM_DISPLAY
+        room_options.append(unassigned_label)
+        room_lookup[unassigned_label] = unassigned_room_bucket()
+
+        for r in self.rooms:
+            label = _safe_text(r.get("roomDisplay", "")).strip()
+            if not label:
+                continue
+            if label not in room_lookup:
+                room_options.append(label)
+                room_lookup[label] = r
+
+        room_prompt = "Choose room (current: %s)" % (current_room_display or "GENERAL")
+        selected_room_label = forms.SelectFromList.show(
+            room_options,
+            title=room_prompt,
+            button_name="Apply",
+            multiselect=False
+        )
+        if selected_room_label is None:
+            return
+
+        selected_room = room_lookup.get(_safe_text(selected_room_label))
+
         current["text"] = updated_text
         current["category"] = category
         current["assignedTo"] = _safe_text(assigned_to).strip()
+        current["assigned_to"] = current["assignedTo"]
         current["dueDate"] = _safe_text(due_date).strip() if category == "Action Item" else ""
+
+        if selected_room is not None:
+            current["roomId"] = _safe_text(selected_room.get("roomId", ""))
+            current["roomDisplay"] = _safe_text(selected_room.get("roomDisplay", ""))
+            current["roomNumber"] = _safe_text(selected_room.get("number", ""))
+            current["roomName"] = _safe_text(selected_room.get("name", ""))
+            current["level"] = _safe_text(selected_room.get("level", ""))
+            current["elementId"] = _safe_text(selected_room.get("elementId", ""))
+
+            # Keep raw payload in sync so tab/filter logic updates immediately.
+            self._set_note_room(note_id, selected_room)
+
         current["editedAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         current["editedBy"] = self.current_user
+
+        # Ensure raw payload keys are also synced for imported/legacy notes.
+        self._set_note_assignee(note_id, current.get("assignedTo", ""))
 
         self.all_notes[idx] = current
         self._save()
         self._bind_history_filter()
         self._update_selected_room_ui()
         self._render_history()
+
+    def on_reassign_note_room(self, sender, args):
+        note_id = _safe_text(sender.Tag)
+        if not note_id:
+            return
+
+        idx = -1
+        current = None
+        for i, note in enumerate(self.all_notes):
+            n = _normalize_note(note)
+            if _safe_text(n.get("id")) == note_id:
+                idx = i
+                current = n
+                break
+
+        if idx < 0 or not current:
+            return
+
+        current_room_display = _safe_text(current.get("roomDisplay", "")).strip() or "GENERAL"
+        room_options = []
+        room_lookup = {}
+
+        unassigned_label = UNASSIGNED_ROOM_DISPLAY
+        room_options.append(unassigned_label)
+        room_lookup[unassigned_label] = unassigned_room_bucket()
+
+        for r in self.rooms:
+            label = _safe_text(r.get("roomDisplay", "")).strip()
+            if not label:
+                continue
+            if label not in room_lookup:
+                room_options.append(label)
+                room_lookup[label] = r
+
+        selected_room_label = forms.SelectFromList.show(
+            room_options,
+            title="Assign Room (current: %s)" % current_room_display,
+            button_name="Assign",
+            multiselect=False
+        )
+        if not selected_room_label:
+            return
+
+        selected_room = room_lookup.get(_safe_text(selected_room_label))
+        if not selected_room:
+            selected_room = unassigned_room_bucket()
+
+        current["roomId"] = _safe_text(selected_room.get("roomId", ""))
+        current["roomDisplay"] = _safe_text(selected_room.get("roomDisplay", ""))
+        current["roomNumber"] = _safe_text(selected_room.get("number", ""))
+        current["roomName"] = _safe_text(selected_room.get("name", ""))
+        current["level"] = _safe_text(selected_room.get("level", ""))
+        current["elementId"] = _safe_text(selected_room.get("elementId", ""))
+        current["editedAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current["editedBy"] = self.current_user
+
+        # Write to raw payload so General tab/filter state updates correctly.
+        self._set_note_room(note_id, selected_room)
+
+        self.all_notes[idx] = current
+        self._save()
+        self._bind_history_filter()
+
+        # If reassigned out of GENERAL while viewing that tab, jump to the new room view.
+        target_room_id = _safe_text(selected_room.get("roomId", ""))
+        target_room_display = _safe_text(selected_room.get("roomDisplay", ""))
+        if self.active_tab == "Pending" and target_room_id != UNASSIGNED_ROOM_ID:
+            self.active_tab = "All"
+            self._update_tab_visuals()
+            if target_room_display:
+                self.historyFilterCombo.SelectedItem = target_room_display
+
+        self._update_selected_room_ui()
+        self._render_history()
+
+    def on_reassign_note_assignee(self, sender, args):
+        note_id = _safe_text(sender.Tag)
+        if not note_id:
+            return
+
+        idx = -1
+        current = None
+        for i, note in enumerate(self.all_notes):
+            n = _normalize_note(note)
+            if _safe_text(n.get("id")) == note_id:
+                idx = i
+                current = n
+                break
+
+        if idx < 0 or not current:
+            return
+
+        current_assigned = _safe_text(current.get("assignedTo", "")).strip()
+        options = ["Keep Current", "Clear Assigned"]
+        for name in DEFAULT_TEAM_MEMBERS:
+            if name not in options:
+                options.append(name)
+        for name in self.custom_assignees:
+            if name and name not in options:
+                options.append(name)
+        options.append("Type Custom...")
+
+        selected = forms.SelectFromList.show(
+            options,
+            title="Assign Person (current: %s)" % (current_assigned or "none"),
+            button_name="Apply",
+            multiselect=False
+        )
+        if selected is None:
+            return
+
+        selected_text = _safe_text(selected).strip()
+        if selected_text == "Keep Current":
+            return
+        elif selected_text == "Clear Assigned":
+            new_assigned = ""
+        elif selected_text == "Type Custom...":
+            typed = forms.ask_for_string(
+                default=current_assigned,
+                prompt="Assigned to (leave blank for none)",
+                title="Assign Person"
+            )
+            if typed is None:
+                return
+            new_assigned = _safe_text(typed).strip()
+            self._remember_custom_assignee(new_assigned)
+        else:
+            new_assigned = selected_text
+
+        current["assignedTo"] = new_assigned
+        current["assigned_to"] = new_assigned
+
+        # Update raw payload keys so imported notes do not keep stale assignee values.
+        if not self._set_note_assignee(note_id, new_assigned):
+            current["editedAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            current["editedBy"] = self.current_user
+            self.all_notes[idx] = current
+
+        if new_assigned and new_assigned not in DEFAULT_TEAM_MEMBERS:
+            self._remember_custom_assignee(new_assigned)
+
+        self._save()
+        self._bind_assignees()
+        self._bind_history_filter()
+        self._update_selected_room_ui()
+        self._render_history()
+
+    def on_reassign_note_category(self, sender, args):
+        note_id = _safe_text(sender.Tag)
+        if not note_id:
+            return
+
+        idx = -1
+        current = None
+        for i, note in enumerate(self.all_notes):
+            n = _normalize_note(note)
+            if _safe_text(n.get("id")) == note_id:
+                idx = i
+                current = n
+                break
+
+        if idx < 0 or not current:
+            return
+
+        current_category = _normalize_category(current.get("category", "Observation"))
+        options = []
+        for c in CATEGORY_OPTIONS:
+            if c == current_category:
+                options.append("%s (current)" % c)
+            else:
+                options.append(c)
+
+        selected = forms.SelectFromList.show(
+            options,
+            title="Change Type",
+            button_name="Apply",
+            multiselect=False
+        )
+        if not selected:
+            return
+
+        selected_text = _safe_text(selected).replace(" (current)", "", 1).strip()
+        new_category = _normalize_category(selected_text)
+        if new_category == current_category:
+            return
+
+        current["category"] = new_category
+        if new_category != "Action Item":
+            current["dueDate"] = ""
+
+        # If this note is currently General, offer room assignment so it leaves that bucket.
+        current_room_id = _safe_text(current.get("roomId", ""))
+        if current_room_id == UNASSIGNED_ROOM_ID:
+            room_options = ["Keep General"]
+            room_lookup = {"Keep General": None}
+            for r in self.rooms:
+                label = _safe_text(r.get("roomDisplay", "")).strip()
+                if not label:
+                    continue
+                if label not in room_lookup:
+                    room_options.append(label)
+                    room_lookup[label] = r
+
+            picked_room = forms.SelectFromList.show(
+                room_options,
+                title="This note is General. Move it to a room?",
+                button_name="Apply",
+                multiselect=False
+            )
+            if picked_room and _safe_text(picked_room) != "Keep General":
+                chosen_room = room_lookup.get(_safe_text(picked_room))
+                if chosen_room:
+                    current["roomId"] = _safe_text(chosen_room.get("roomId", ""))
+                    current["roomDisplay"] = _safe_text(chosen_room.get("roomDisplay", ""))
+                    current["roomNumber"] = _safe_text(chosen_room.get("number", ""))
+                    current["roomName"] = _safe_text(chosen_room.get("name", ""))
+                    current["level"] = _safe_text(chosen_room.get("level", ""))
+                    current["elementId"] = _safe_text(chosen_room.get("elementId", ""))
+                    self._set_note_room(note_id, chosen_room)
+
+        current["editedAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current["editedBy"] = self.current_user
+        self.all_notes[idx] = current
+
+        self._save()
+        self._bind_history_filter()
+        self._update_selected_room_ui()
+        self._render_history()
+
+    def on_bulk_assign(self, sender, args):
+        note_ids = self._pick_bulk_note_ids("Bulk Assign - Select Notes")
+        if not note_ids:
+            return
+
+        options = ["Clear Assigned"]
+        for name in DEFAULT_TEAM_MEMBERS:
+            if name not in options:
+                options.append(name)
+        for name in self.custom_assignees:
+            if name and name not in options:
+                options.append(name)
+        options.append("Type Custom...")
+
+        selected = forms.SelectFromList.show(
+            options,
+            title="Bulk Assign - Choose Person",
+            button_name="Apply",
+            multiselect=False
+        )
+        if selected is None:
+            return
+
+        selected_text = _safe_text(selected).strip()
+        if selected_text == "Clear Assigned":
+            new_assigned = ""
+        elif selected_text == "Type Custom...":
+            typed = forms.ask_for_string(default="", prompt="Assigned to (leave blank for none)", title="Bulk Assign")
+            if typed is None:
+                return
+            new_assigned = _safe_text(typed).strip()
+            self._remember_custom_assignee(new_assigned)
+        else:
+            new_assigned = selected_text
+
+        changed = 0
+        for nid in note_ids:
+            if self._set_note_assignee(nid, new_assigned):
+                changed += 1
+
+        if new_assigned and new_assigned not in DEFAULT_TEAM_MEMBERS:
+            self._remember_custom_assignee(new_assigned)
+
+        self._save()
+        self._bind_assignees()
+        self._bind_history_filter()
+        self._update_selected_room_ui()
+        self._render_history()
+        forms.alert("Bulk assign updated %s notes." % changed)
+
+    def on_bulk_type(self, sender, args):
+        note_ids = self._pick_bulk_note_ids("Bulk Type - Select Notes")
+        if not note_ids:
+            return
+
+        selected = forms.SelectFromList.show(
+            CATEGORY_OPTIONS,
+            title="Bulk Type - Choose Type",
+            button_name="Apply",
+            multiselect=False
+        )
+        if not selected:
+            return
+
+        new_category = _normalize_category(selected)
+        now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        changed = 0
+        changed_unassigned_ids = []
+
+        id_set = set(note_ids)
+        for i, note in enumerate(self.all_notes):
+            raw = note if isinstance(note, dict) else {}
+            nid = _safe_text(_normalize_note(raw).get("id", ""))
+            if not nid or nid not in id_set:
+                continue
+
+            raw["category"] = new_category
+            if new_category != "Action Item":
+                raw["dueDate"] = ""
+            if _safe_text(raw.get("roomId", "")) == UNASSIGNED_ROOM_ID:
+                changed_unassigned_ids.append(nid)
+            raw["editedAt"] = now_text
+            raw["editedBy"] = self.current_user
+            self.all_notes[i] = raw
+            changed += 1
+
+        # Offer one-shot room assignment for all changed notes still in General.
+        if changed_unassigned_ids:
+            room_options = ["Keep General"]
+            room_lookup = {"Keep General": None}
+            for r in self.rooms:
+                label = _safe_text(r.get("roomDisplay", "")).strip()
+                if not label:
+                    continue
+                if label not in room_lookup:
+                    room_options.append(label)
+                    room_lookup[label] = r
+
+            picked_room = forms.SelectFromList.show(
+                room_options,
+                title="%s changed notes are still General. Move them to one room?" % len(changed_unassigned_ids),
+                button_name="Apply",
+                multiselect=False
+            )
+            if picked_room and _safe_text(picked_room) != "Keep General":
+                chosen_room = room_lookup.get(_safe_text(picked_room))
+                if chosen_room:
+                    for nid in changed_unassigned_ids:
+                        self._set_note_room(nid, chosen_room)
+
+        self._save()
+        self._bind_history_filter()
+        self._update_selected_room_ui()
+        self._render_history()
+        forms.alert("Bulk type updated %s notes." % changed)
 
     def on_delete_note(self, sender, args):
         note_id = _safe_text(sender.Tag)
@@ -2273,6 +3666,11 @@ class RedlineWindow(forms.WPFWindow):
                 room = unassigned_room_bucket()
             else:
                 room = self._match_room_from_text(item.get("room", ""))
+
+            # Never drop imported AI items because of room matching failures.
+            if not room:
+                room = unassigned_room_bucket()
+
             if not room:
                 continue
 
@@ -2304,18 +3702,36 @@ class RedlineWindow(forms.WPFWindow):
                 self.all_notes.append(note)
                 added += 1
 
+        for item in parsed:
+            assigned = _safe_text(item.get("assignedTo", "")).strip()
+            if assigned and assigned not in DEFAULT_TEAM_MEMBERS:
+                self._remember_custom_assignee(assigned)
+
         self._save()
         self._bind_history_filter()
+        self._bind_assignees()
         self._update_selected_room_ui()
         self._render_history()
 
         forms.alert("Imported %s notes from AI template." % added)
+
+    def on_open_tutorial(self, sender, args):
+        try:
+            Process.Start(TUTORIAL_URL)
+        except Exception:
+            forms.alert("Could not open browser. Visit: %s" % TUTORIAL_URL, warn_icon=True)
 
     def on_open_upload_info(self, sender, args):
         try:
             Process.Start(UPLOAD_INFO_URL)
         except Exception:
             forms.alert("Could not open browser. Visit: %s" % UPLOAD_INFO_URL, warn_icon=True)
+
+    def on_open_update_info(self, sender, args):
+        try:
+            Process.Start(UPDATE_INFO_URL)
+        except Exception:
+            forms.alert("Could not open browser. Visit: %s" % UPDATE_INFO_URL, warn_icon=True)
 
 
 def main():

@@ -7,7 +7,7 @@
         ResizeMode="CanResize"
         MinWidth="980"
         MinHeight="700"
-        Background="#111111"
+        Background="#2d2d2d"
         Foreground="#F3F4F6">
     <Window.Resources>
         <Style x:Key="ReadableComboItemStyle" TargetType="ComboBoxItem">
@@ -22,19 +22,81 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="#171717" BorderBrush="#262626" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
-            <StackPanel>
-                <TextBlock FontSize="28" FontWeight="Bold" Foreground="#FFFFFF" Text="Datum Notes"/>
-                <TextBlock FontSize="18" FontWeight="SemiBold" Margin="0,4,0,0" Text="Redline" Foreground="#F59E0B"/>
-                <TextBlock Margin="0,4,0,0" Foreground="#A3A3A3" Text="Capture room-level redlines, track accountability, and export polished summaries."/>
-            </StackPanel>
+        <Border Grid.Row="0" Background="#3a3a3a" BorderBrush="#555555" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock FontSize="28" FontWeight="Bold" Foreground="#FFFFFF" Text="Datum Notes"/>
+                    <TextBlock FontSize="18" FontWeight="SemiBold" Margin="0,4,0,0" Text="Redline" Foreground="#F59E0B">
+                        <TextBlock.Inlines>
+                            <Run Text=" "/>
+                            <Run x:Name="versionTextRun" Foreground="#DAA520" FontSize="13" FontWeight="Normal" Text="v0.0.0"/>
+                        </TextBlock.Inlines>
+                    </TextBlock>
+                    <TextBlock Margin="0,4,0,0" Foreground="#C4C4C4" Text="Capture room-level redlines, track accountability, export polished summaries, and log today&apos;s work focus."/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                    <Button x:Name="tutorialButton" MinWidth="88" MinHeight="32" Padding="12,4" Content="Tutorial" Background="#505050" Foreground="#93C5FD" BorderBrush="#6b6b6b" Margin="0,0,8,0"/>
+                    <Button x:Name="updateButton" MinWidth="88" MinHeight="32" Padding="12,4" Content="Check for Updates" Background="#505050" Foreground="#FDE68A" BorderBrush="#6b6b6b" Margin="0,0,8,0"/>
+                </StackPanel>
+            </Grid>
         </Border>
 
-        <Border Grid.Row="1" Background="#171717" BorderBrush="#262626" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,12">
+        <Border Grid.Row="1" Background="#3a3a3a" BorderBrush="#555555" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,12">
+            <Expander x:Name="workSectionExpander" IsExpanded="False" Foreground="#F3F4F6">
+                <Expander.Header>
+                    <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#F59E0B" Text="What would you like to work on today?"/>
+                </Expander.Header>
+                <Grid Margin="0,10,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" FontSize="12" Foreground="#D4D4D4" Text="Track today&apos;s focus and recent work log."/>
+                        <Button x:Name="calendarWorkButton" Grid.Column="1" MinWidth="92" MinHeight="32" Padding="12,4" Content="Calendar" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    </Grid>
+
+                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="workTodayText" Grid.Column="0" Margin="0,0,8,0" MinHeight="34" VerticalContentAlignment="Center" Background="#454545" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                        <Button x:Name="addWorkItemButton" Grid.Column="1" MinWidth="120" MinHeight="34" Padding="12,4" Content="Log Work" Background="#F59E0B" Foreground="#111111" BorderBrush="#D97706" FontWeight="Bold"/>
+                    </Grid>
+
+                    <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock x:Name="workHistoryMetaText" Grid.Row="0" Foreground="#D4D4D4" FontSize="12" Text="Recent work shows here. Items older than one week are grouped by default." Margin="0,0,0,8"/>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="240">
+                            <StackPanel x:Name="workHistoryPanel" Margin="2"/>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+            </Expander>
+        </Border>
+
+        <Border Grid.Row="2" Background="#3a3a3a" BorderBrush="#555555" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,12">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -50,9 +112,9 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <ComboBox x:Name="roomCombo" Grid.Column="0" Margin="0,0,8,0" MinHeight="32" Background="#FFFFFF" Foreground="#000000" BorderBrush="#3F3F46" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
-                    <Button x:Name="goToRoomButton" Grid.Column="1" Margin="0,0,8,0" MinWidth="110" MinHeight="32" Padding="10,4" Content="Go To Room" Background="#262626" Foreground="#FDE68A" BorderBrush="#3F3F46"/>
-                    <Button x:Name="toggleRoomResolvedButton" Grid.Column="2" MinWidth="140" MinHeight="32" Padding="10,4" Content="Mark Room Resolved" Background="#1F2937" Foreground="#D1FAE5" BorderBrush="#065F46"/>
+                    <ComboBox x:Name="roomCombo" Grid.Column="0" Margin="0,0,8,0" MinHeight="32" Background="#FFFFFF" Foreground="#000000" BorderBrush="#6b6b6b" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
+                    <Button x:Name="goToRoomButton" Grid.Column="1" Margin="0,0,8,0" MinWidth="110" MinHeight="32" Padding="10,4" Content="Go To Room" Background="#505050" Foreground="#FDE68A" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="toggleRoomResolvedButton" Grid.Column="2" MinWidth="140" MinHeight="32" Padding="10,4" Content="Mark Room Resolved" Background="#2d3a2f" Foreground="#D1FAE5" BorderBrush="#1f7e4d"/>
                 </Grid>
 
                 <Grid Grid.Row="1" Margin="0,0,0,8">
@@ -64,10 +126,10 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <ComboBox x:Name="categoryCombo" Grid.Column="0" MinHeight="32" Background="#FFFFFF" Foreground="#000000" BorderBrush="#3F3F46" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
-                    <ComboBox x:Name="assignedToCombo" Grid.Column="2" MinHeight="32" Background="#FFFFFF" Foreground="#000000" BorderBrush="#3F3F46" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
-                    <TextBox x:Name="assignedToCustomText" Grid.Column="4" MinHeight="32" Margin="0,0,8,0" Visibility="Collapsed" Background="#0D0D0D" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <Button x:Name="addCustomAssigneeButton" Grid.Column="5" MinWidth="92" MinHeight="32" Padding="10,4" Content="Save Name" Visibility="Collapsed" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
+                    <ComboBox x:Name="categoryCombo" Grid.Column="0" MinHeight="32" Background="#FFFFFF" Foreground="#000000" BorderBrush="#6b6b6b" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
+                    <ComboBox x:Name="assignedToCombo" Grid.Column="2" MinHeight="32" Background="#FFFFFF" Foreground="#000000" BorderBrush="#6b6b6b" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
+                    <TextBox x:Name="assignedToCustomText" Grid.Column="4" MinHeight="32" Margin="0,0,8,0" Visibility="Collapsed" Background="#454545" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="addCustomAssigneeButton" Grid.Column="5" MinWidth="92" MinHeight="32" Padding="10,4" Content="Save Name" Visibility="Collapsed" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
                 </Grid>
 
                 <Grid Grid.Row="2" Margin="0,0,0,8">
@@ -75,12 +137,12 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBox x:Name="noteText" Grid.Column="0" Margin="0,0,8,0" MinHeight="32" VerticalContentAlignment="Center" Background="#0D0D0D" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
+                    <TextBox x:Name="noteText" Grid.Column="0" Margin="0,0,8,0" MinHeight="32" VerticalContentAlignment="Center" Background="#454545" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
                     <Button x:Name="addNoteButton" Grid.Column="1" MinWidth="112" MinHeight="32" Padding="10,4" Content="Add Redline" Background="#F59E0B" Foreground="#111111" BorderBrush="#D97706" FontWeight="Bold"/>
                 </Grid>
 
                 <StackPanel x:Name="dueDatePanel" Grid.Row="3" Orientation="Horizontal" Visibility="Collapsed" Margin="0,0,0,8">
-                    <TextBlock Margin="0,0,8,0" VerticalAlignment="Center" Foreground="#A3A3A3" Text="Due Date"/>
+                    <TextBlock Margin="0,0,8,0" VerticalAlignment="Center" Foreground="#888888" Text="Due Date"/>
                     <DatePicker x:Name="dueDatePicker" Width="155"/>
                 </StackPanel>
 
@@ -92,7 +154,7 @@
             </Grid>
         </Border>
 
-        <Border Grid.Row="2" Background="#171717" BorderBrush="#262626" BorderThickness="1" CornerRadius="8" Padding="10">
+        <Border Grid.Row="3" Background="#3a3a3a" BorderBrush="#555555" BorderThickness="1" CornerRadius="8" Padding="10">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -118,12 +180,12 @@
                         <ColumnDefinition Width="220"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" FontSize="14" FontWeight="SemiBold" Foreground="#F59E0B" VerticalAlignment="Center" Text="Redline History"/>
-                    <Button x:Name="expandAllButton" Grid.Column="2" MinHeight="28" Padding="8,3" Content="Expand All" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <Button x:Name="collapseAllButton" Grid.Column="4" MinHeight="28" Padding="8,3" Content="Collapse All" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <TextBlock Grid.Column="6" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#A3A3A3" Text="Sort"/>
-                    <ComboBox x:Name="historySortCombo" Grid.Column="7" MinHeight="28" Background="#FFFFFF" Foreground="#000000" BorderBrush="#3F3F46" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
-                    <TextBlock Grid.Column="9" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#A3A3A3" Text="Room"/>
-                    <ComboBox x:Name="historyFilterCombo" Grid.Column="10" MinHeight="28" Background="#FFFFFF" Foreground="#000000" BorderBrush="#3F3F46" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
+                    <Button x:Name="expandAllButton" Grid.Column="2" MinHeight="28" Padding="8,3" Content="Expand All" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="collapseAllButton" Grid.Column="4" MinHeight="28" Padding="8,3" Content="Collapse All" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <TextBlock Grid.Column="6" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#888888" Text="Sort"/>
+                    <ComboBox x:Name="historySortCombo" Grid.Column="7" MinHeight="28" Background="#FFFFFF" Foreground="#000000" BorderBrush="#6b6b6b" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
+                    <TextBlock Grid.Column="9" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#888888" Text="Room"/>
+                    <ComboBox x:Name="historyFilterCombo" Grid.Column="10" MinHeight="28" Background="#FFFFFF" Foreground="#000000" BorderBrush="#6b6b6b" ItemContainerStyle="{StaticResource ReadableComboItemStyle}" ItemTemplate="{StaticResource ReadableComboItemTemplate}"/>
                 </Grid>
 
                 <Grid Grid.Row="1" Margin="0,0,0,8">
@@ -132,17 +194,17 @@
                         <ColumnDefinition Width="8"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" VerticalAlignment="Center" Foreground="#A3A3A3" Text="Search"/>
-                    <TextBox x:Name="historySearchBox" Grid.Column="2" MinHeight="30" Background="#0D0D0D" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
+                    <TextBlock Grid.Column="0" VerticalAlignment="Center" Foreground="#888888" Text="Search"/>
+                    <TextBox x:Name="historySearchBox" Grid.Column="2" MinHeight="30" Background="#454545" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
                 </Grid>
 
                 <UniformGrid Grid.Row="2" Columns="6" Margin="0,0,0,8">
-                    <Button x:Name="tabAllButton" Margin="0,0,6,0" Content="All" MinHeight="28" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <Button x:Name="tabActionButton" Margin="0,0,6,0" Content="Action Items" MinHeight="28" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <Button x:Name="tabQuestionButton" Margin="0,0,6,0" Content="Questions" MinHeight="28" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <Button x:Name="tabDecisionButton" Margin="0,0,6,0" Content="Decisions" MinHeight="28" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <Button x:Name="tabObservationButton" Margin="0,0,6,0" Content="Observations" MinHeight="28" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <Button x:Name="tabUnassignedButton" Content="Unassigned" MinHeight="28" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
+                    <Button x:Name="tabAllButton" Margin="0,0,6,0" Content="All" MinHeight="28" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="tabActionButton" Margin="0,0,6,0" Content="Action Items" MinHeight="28" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="tabQuestionButton" Margin="0,0,6,0" Content="Questions" MinHeight="28" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="tabDecisionButton" Margin="0,0,6,0" Content="Decisions" MinHeight="28" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="tabObservationButton" Margin="0,0,6,0" Content="Observations" MinHeight="28" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="tabUnassignedButton" Content="Pending" MinHeight="28" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
                 </UniformGrid>
 
                 <Grid Grid.Row="3" Margin="0,0,0,6">
@@ -152,9 +214,9 @@
                         <ColumnDefinition Width="8"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="historyGlobalSummaryText" Grid.Column="0" Foreground="#A3A3A3" FontSize="12" VerticalAlignment="Center" Text="Total notes: 0 | Action items: 0 | Completed: 0"/>
-                    <Button x:Name="toggleCompletedButton" Grid.Column="1" MinHeight="26" Padding="8,2" Content="Show Completed" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-                    <Button x:Name="toggleDeletedButton" Grid.Column="3" MinHeight="26" Padding="8,2" Content="Show Deleted" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
+                    <TextBlock x:Name="historyGlobalSummaryText" Grid.Column="0" Foreground="#888888" FontSize="12" VerticalAlignment="Center" Text="Total notes: 0 | Action items: 0 | Completed: 0"/>
+                    <Button x:Name="toggleCompletedButton" Grid.Column="1" MinHeight="26" Padding="8,2" Content="Show Completed" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+                    <Button x:Name="toggleDeletedButton" Grid.Column="3" MinHeight="26" Padding="8,2" Content="Show Deleted" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
                 </Grid>
 
                 <TextBlock Grid.Row="4" Foreground="#737373" FontSize="11" Margin="0,0,0,4" Text="Completed and deleted items are kept in separate collapsible sections below open notes."/>
@@ -165,14 +227,16 @@
             </Grid>
         </Border>
 
-        <WrapPanel Grid.Row="3" Margin="0,12,0,0" Orientation="Horizontal" ItemHeight="32" ItemWidth="160">
+        <WrapPanel Grid.Row="4" Margin="0,12,0,0" Orientation="Horizontal" ItemHeight="32" ItemWidth="160">
             <Button x:Name="exportButton" Content="Export" Margin="0,0,8,8" Background="#F59E0B" Foreground="#111111" BorderBrush="#D97706" FontWeight="Bold"/>
-            <Button x:Name="weeklyDigestButton" Content="Weekly Digest" Margin="0,0,8,8" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-            <Button x:Name="exportTeamButton" Content="Export for Team Member" Margin="0,0,8,8" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-            <Button x:Name="importTeamButton" Content="Import" Margin="0,0,8,8" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-            <Button x:Name="copyAiTemplateButton" Content="Copy AI Template" Margin="0,0,8,8" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-            <Button x:Name="importAiButton" Content="Import from AI" Margin="0,0,8,8" Background="#262626" Foreground="#F3F4F6" BorderBrush="#3F3F46"/>
-            <Button x:Name="uploadLinkButton" Content="Upload to Datum Notes" Margin="0,0,8,8" Background="#262626" Foreground="#FDE68A" BorderBrush="#3F3F46"/>
+            <Button x:Name="bulkAssignButton" Content="Bulk Assign" Margin="0,0,8,8" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+            <Button x:Name="bulkTypeButton" Content="Bulk Type" Margin="0,0,8,8" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+            <Button x:Name="weeklyDigestButton" Content="Weekly Digest" Margin="0,0,8,8" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+            <Button x:Name="exportTeamButton" Content="Export for Team Member" Margin="0,0,8,8" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+            <Button x:Name="importTeamButton" Content="Import" Margin="0,0,8,8" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+            <Button x:Name="copyAiTemplateButton" Content="Copy AI Template" Margin="0,0,8,8" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+            <Button x:Name="importAiButton" Content="Import from AI" Margin="0,0,8,8" Background="#505050" Foreground="#F3F4F6" BorderBrush="#6b6b6b"/>
+            <Button x:Name="uploadLinkButton" Content="Upload to Datum Notes" Visibility="Collapsed" Margin="0,0,8,8" Background="#505050" Foreground="#FDE68A" BorderBrush="#6b6b6b"/>
         </WrapPanel>
     </Grid>
 </Window>
